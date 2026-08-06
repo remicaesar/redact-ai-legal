@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Redact AI</title>
+    <link rel="stylesheet" href="/static/workstation.css">
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f7f8fb;
+            --panel: #ffffff;
+            --panel-soft: #f0f4f8;
+            --border: #d8e0ea;
+            --text: #17202a;
+            --muted: #667085;
+            --blue: #2563eb;
+            --teal: #0f766e;
+            --amber: #b45309;
+            --red: #b42318;
+            --green: #167647;
+            --shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            display: flex;
+            gap: 18px;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 28px;
+            background: rgba(255, 255, 255, 0.94);
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+        }
+        h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
+        .subtitle { margin-top: 3px; color: var(--muted); font-size: 13px; max-width: 820px; }
+        .search { width: min(420px, 40vw); }
+        input, select {
+            width: 100%;
+            height: 38px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0 12px;
+            background: #fff;
+            color: var(--text);
+            font: inherit;
+        }
+        main {
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            min-height: calc(100vh - 78px);
+        }
+        aside {
+            padding: 20px;
+            border-right: 1px solid var(--border);
+            background: #fbfcfe;
+        }
+        .filter-block { margin-bottom: 24px; }
+        .filter-block h2 {
+            margin: 0 0 10px;
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0;
+        }
+        .filter-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 10px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            cursor: pointer;
+            font: inherit;
+            font-size: 13px;
+        }
+        .filter-btn:hover, .filter-btn.active { background: var(--panel-soft); }
+        .count {
+            color: var(--muted);
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+        }
+        .content { padding: 22px 28px 32px; min-width: 0; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+        .stat, .terminology, .table-wrap, .studio {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+        }
+        .stat { padding: 14px; }
+        .stat-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .stat-label { color: var(--muted); font-size: 13px; margin-top: 4px; }
+        .terminology {
+            padding: 14px;
+            margin-bottom: 18px;
+        }
+        .studio {
+            position: relative;
+            overflow: hidden;
+            padding: 22px 24px 24px;
+            margin-bottom: 18px;
+            border-color: var(--color-border-strong);
+        }
+        .studio::before {
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 3px;
+            background: var(--color-accent);
+            content: "";
+        }
+        .studio-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+        .studio-head h2 {
+            margin: 0;
+            font-family: var(--font-document);
+            font-size: 21px;
+            font-weight: 500;
+        }
+        .studio-kicker {
+            margin-bottom: 5px;
+            color: var(--color-accent);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: .13em;
+            text-transform: uppercase;
+        }
+        .studio-copy {
+            margin-top: 5px;
+            color: var(--muted);
+            font-size: 12.5px;
+        }
+        .studio-form {
+            display: grid;
+            grid-template-columns: minmax(280px, 1fr) minmax(200px, 280px) 178px;
+            gap: 12px;
+            align-items: end;
+        }
+        .upload-field {
+            display: grid;
+            gap: 7px;
+            min-width: 0;
+        }
+        .upload-field-label {
+            color: var(--color-text-faint);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .11em;
+            text-transform: uppercase;
+        }
+        .file-picker {
+            min-width: 0;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 5px 14px 5px 6px;
+            border: 1px solid var(--color-border-strong);
+            border-radius: 8px;
+            background: var(--color-surface-soft);
+            cursor: pointer;
+            transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+        }
+        .file-picker:hover {
+            border-color: var(--color-text-muted);
+            background: var(--color-surface);
+        }
+        .file-picker:focus-within {
+            border-color: var(--color-focus);
+            box-shadow: var(--focus-ring);
+        }
+        .file-picker-action {
+            flex: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            height: 34px;
+            padding: 0 12px;
+            border-radius: 6px;
+            background: var(--color-text);
+            color: var(--color-canvas);
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .file-picker-action::before {
+            content: "+";
+            font-family: var(--font-mono);
+            font-size: 15px;
+            font-weight: 400;
+        }
+        .file-picker-name {
+            overflow: hidden;
+            color: var(--color-text-muted);
+            font-size: 13px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .file-picker.has-file .file-picker-name {
+            color: var(--color-text);
+            font-weight: 600;
+        }
+        .visually-hidden-file {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip: rect(0 0 0 0);
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+        .studio-form select,
+        .studio-form .primary-btn {
+            height: 48px;
+            border-radius: 8px;
+        }
+        .primary-btn {
+            height: 38px;
+            border: 0;
+            border-radius: 6px;
+            background: var(--blue);
+            color: #fff;
+            cursor: pointer;
+            font: inherit;
+            font-weight: 700;
+        }
+        .studio-form .primary-btn {
+            gap: 8px;
+            border: 1px solid var(--color-accent);
+            box-shadow: 0 6px 16px rgba(110, 42, 50, .14);
+            font-size: 13px;
+        }
+        .studio-form .primary-btn::after {
+            content: "\2192";
+            font-size: 16px;
+            font-weight: 400;
+        }
+        .primary-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .studio-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            min-height: 24px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        .terms {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .term {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            background: #fbfcfe;
+        }
+        .term strong { display: block; margin-bottom: 4px; font-size: 13px; }
+        .term span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+        .results-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 16px 0 10px;
+        }
+        .results-head h2 { margin: 0; font-size: 16px; }
+        .pager {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            padding: 14px 0 4px;
+            font-size: 12.5px;
+            color: var(--muted);
+        }
+        .pager button {
+            min-height: 32px;
+            padding: 0 14px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+            font: inherit;
+            font-size: 12.5px;
+            font-weight: 550;
+            cursor: pointer;
+        }
+        .pager button:disabled { opacity: 0.4; cursor: default; }
+        .pager[hidden] { display: none; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th, td {
+            padding: 11px 12px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            font-size: 13px;
+            vertical-align: middle;
+        }
+        th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; background: #fbfcfe; }
+        tbody tr { cursor: pointer; }
+        tbody tr:hover { background: #f6f9fc; }
+        .doc-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 600;
+        }
+        .small { color: var(--muted); font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            background: var(--panel-soft);
+            color: var(--muted);
+        }
+        .risk-Low { background: #e9f7ef; color: var(--green); }
+        .risk-Medium { background: #fff4df; color: var(--amber); }
+        .risk-High { background: #fee4e2; color: var(--red); }
+        .risk-Unknown { background: #f2f4f7; color: #344054; }
+        .ready-Blocked { background: #fee4e2; color: var(--red); }
+        .ready-Needs { background: #fff4df; color: var(--amber); }
+        .ready-Allowed { background: #e9f7ef; color: var(--green); }
+        .pipeline-pill {
+            display: inline-flex;
+            align-items: center;
+            max-width: 100%;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            background: #fff4df;
+            color: var(--amber);
+            border: 1px solid #f4ddb0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .pipeline-pill.stage-ready { background: #e9f7ef; color: var(--green); border-color: #bfe5cf; }
+        .pipeline-pill.stage-blocked { background: #fee4e2; color: var(--red); border-color: #f3b4ae; }
+        .pipeline-pill.stage-ocr_review, .pipeline-pill.stage-needs_ocr { background: #eef4fb; color: var(--blue); border-color: #c8ddf2; }
+        @media (max-width: 980px) {
+            header { align-items: stretch; flex-direction: column; }
+            .search { width: 100%; }
+            main { grid-template-columns: 1fr; }
+            aside { border-right: 0; border-bottom: 1px solid var(--border); }
+            .stats, .terms, .studio-form { grid-template-columns: 1fr; }
+            .studio { padding: 20px; }
+            .hide-mobile { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="app-sidebar" aria-label="Workstation navigation">
+            <div class="brand-block">
+                <div class="brand-title">Redact AI</div>
+                <div class="brand-subtitle">Privacy review workstation</div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-section-label">Workspace</div>
+                <a class="nav-item active" href="/"><span class="nav-icon">D</span>Dashboard</a>
+                <a class="nav-item" href="/matters"><span class="nav-icon">M</span>Matters</a>
+                <a class="nav-item" href="/?review_status=pending_review"><span class="nav-icon">R</span>Review Queue</a>
+                <a class="nav-item" href="/?ocr_status=queued"><span class="nav-icon">O</span>OCR Queue</a>
+                <a class="nav-item" href="/?file_type=.docx"><span class="nav-icon">Q</span>DOCX QA</a>
+            </div>
+            {% if can_admin %}
+            <div class="nav-section">
+                <div class="nav-section-label">Admin</div>
+                <a class="nav-item" href="/audit-log"><span class="nav-icon">A</span>Audit Log</a>
+                <a class="nav-item" href="/settings"><span class="nav-icon">S</span>Settings</a>
+            </div>
+            {% endif %}
+            <div class="local-only-note" title="All processing, storage, and exports happen on this machine. No document content is sent to any external service.">Local only · data stays on this device</div>
+            <div class="sidebar-footer">
+                <div class="user-role">{{ current_user.username }} · {{ current_user.role }}</div>
+                <button class="logout-button" type="button" onclick="logout()">Log out</button>
+            </div>
+        </nav>
+
+        <div class="shell-main">
+            <div class="shell-banner">
+                <strong>Privacy-reviewed legal workflow</strong>
+                <div class="trust-strip">
+                    <span class="trust-pill">Redacted</span>
+                    <span class="trust-pill">De-identified</span>
+                    <span class="trust-pill">Pseudonymized</span>
+                    <span class="trust-pill">Human review required</span>
+                </div>
+            </div>
+
+            <header>
+                <div>
+                    <h1>Redact AI</h1>
+                    <div class="subtitle">{{ positioning }}</div>
+                </div>
+                <div class="search">
+                    <input id="searchInput" type="search" placeholder="Search documents, titles, risk notes" autocomplete="off">
+                </div>
+            </header>
+
+            <main>
+                <aside>
+            <div class="filter-block">
+                <h2>Categories</h2>
+                <button class="filter-btn active" data-filter="category" data-value="" onclick="setFilter('category', '', this)">All categories <span class="count">{{ stats.total }}</span></button>
+                {% for cat in category_stats %}
+                <button class="filter-btn" data-filter="category" data-value="{{ cat.id }}" onclick="setFilter('category', '{{ cat.id }}', this)">{{ cat.icon }} {{ cat.name_tr }} <span class="count">{{ cat.cnt }}</span></button>
+                {% endfor %}
+            </div>
+            <div class="filter-block">
+                <h2>Clients</h2>
+                <button class="filter-btn active" data-filter="client" data-value="" onclick="setFilter('client', '', this)">All clients</button>
+                {% for client in client_stats %}
+                <button class="filter-btn" data-filter="client" data-value="{{ client.id }}" onclick="setFilter('client', '{{ client.id }}', this)">{{ client.name }} <span class="count">{{ client.cnt }}</span></button>
+                {% endfor %}
+            </div>
+            <div class="filter-block">
+                <h2>Residual Risk</h2>
+                <button class="filter-btn active" data-filter="risk" data-value="" onclick="setFilter('risk', '', this)">All risk levels</button>
+                <button class="filter-btn" data-filter="risk" data-value="High" onclick="setFilter('risk', 'High', this)">High</button>
+                <button class="filter-btn" data-filter="risk" data-value="Medium" onclick="setFilter('risk', 'Medium', this)">Medium</button>
+                <button class="filter-btn" data-filter="risk" data-value="Low" onclick="setFilter('risk', 'Low', this)">Low</button>
+                <button class="filter-btn" data-filter="risk" data-value="Unknown" onclick="setFilter('risk', 'Unknown', this)">Unknown</button>
+            </div>
+            <div class="filter-block">
+                <h2>External LLM</h2>
+                <button class="filter-btn active" data-filter="readiness" data-value="" onclick="setFilter('readiness', '', this)">All readiness states</button>
+                <button class="filter-btn" data-filter="readiness" data-value="Blocked" onclick="setFilter('readiness', 'Blocked', this)">Blocked</button>
+                <button class="filter-btn" data-filter="readiness" data-value="Needs" onclick="setFilter('readiness', 'Needs', this)">Needs review</button>
+            </div>
+            <div class="filter-block">
+                <h2>Workflow</h2>
+                <button class="filter-btn active" data-filter="review_status" data-value="" onclick="setFilter('review_status', '', this)">All workflow states</button>
+                <button class="filter-btn" data-filter="review_status" data-value="needs_ocr" onclick="setFilter('review_status', 'needs_ocr', this)">Needs OCR</button>
+                <button class="filter-btn" data-filter="review_status" data-value="pending_review" onclick="setFilter('review_status', 'pending_review', this)">Pending review</button>
+                <button class="filter-btn" data-filter="review_status" data-value="redaction_complete" onclick="setFilter('review_status', 'redaction_complete', this)">Redaction complete</button>
+                <button class="filter-btn" data-filter="review_status" data-value="reviewed_blocked" onclick="setFilter('review_status', 'reviewed_blocked', this)">Reviewed blocked</button>
+                <button class="filter-btn" data-filter="review_status" data-value="approved_for_external_llm" onclick="setFilter('review_status', 'approved_for_external_llm', this)">Approved</button>
+            </div>
+            <div class="filter-block">
+                <h2>Extraction</h2>
+                <button class="filter-btn active" data-filter="extraction_status" data-value="" onclick="setFilter('extraction_status', '', this)">All extraction states</button>
+                <button class="filter-btn" data-filter="extraction_status" data-value="Complete" onclick="setFilter('extraction_status', 'Complete', this)">Complete</button>
+                <button class="filter-btn" data-filter="extraction_status" data-value="Partial" onclick="setFilter('extraction_status', 'Partial', this)">Partial</button>
+                <button class="filter-btn" data-filter="extraction_status" data-value="Failed" onclick="setFilter('extraction_status', 'Failed', this)">Failed</button>
+            </div>
+            <div class="filter-block">
+                <h2>OCR Queue</h2>
+                <button class="filter-btn active" data-filter="ocr_status" data-value="" onclick="setFilter('ocr_status', '', this)">All OCR states</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="queued" onclick="setFilter('ocr_status', 'queued', this)">Queued</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="processing" onclick="setFilter('ocr_status', 'processing', this)">Processing</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="completed" onclick="setFilter('ocr_status', 'completed', this)">Completed</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="accepted" onclick="setFilter('ocr_status', 'accepted', this)">Accepted</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="rejected" onclick="setFilter('ocr_status', 'rejected', this)">Rejected</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="failed" onclick="setFilter('ocr_status', 'failed', this)">Failed</button>
+                <button class="filter-btn" data-filter="ocr_status" data-value="not_required" onclick="setFilter('ocr_status', 'not_required', this)">Not required</button>
+            </div>
+            <div class="filter-block">
+                <h2>File Type</h2>
+                <button class="filter-btn active" data-filter="file_type" data-value="" onclick="setFilter('file_type', '', this)">All file types</button>
+                <button class="filter-btn" data-filter="file_type" data-value=".docx" onclick="setFilter('file_type', '.docx', this)">DOCX</button>
+                <button class="filter-btn" data-filter="file_type" data-value=".udf" onclick="setFilter('file_type', '.udf', this)">UDF</button>
+                <button class="filter-btn" data-filter="file_type" data-value=".pdf" onclick="setFilter('file_type', '.pdf', this)">PDF</button>
+                <button class="filter-btn" data-filter="file_type" data-value=".xlsx" onclick="setFilter('file_type', '.xlsx', this)">XLSX</button>
+            </div>
+                </aside>
+
+                <section class="content">
+            <section class="studio">
+                <div class="studio-head">
+                    <div>
+                        <div class="studio-kicker">New review</div>
+                        <h2>Prepare a document for review</h2>
+                        <div class="studio-copy">Files are processed locally and remain subject to human approval.</div>
+                    </div>
+                    <span class="badge">DOCX · PDF · UDF · TXT</span>
+                </div>
+                {% if can_review %}
+                <form id="uploadForm" class="studio-form">
+                    <div class="upload-field">
+                        <span class="upload-field-label">Document</span>
+                        <label id="filePicker" class="file-picker" for="uploadFile">
+                            <span class="file-picker-action">Choose file</span>
+                            <span id="filePickerName" class="file-picker-name">No file selected</span>
+                        </label>
+                        <input class="visually-hidden-file" id="uploadFile" name="file" type="file" accept=".docx,.doc,.pdf,.udf,.txt,.md,.png,.jpg,.jpeg,.xlsx,.pptx,.zip">
+                    </div>
+                    <label class="upload-field" for="matterSelect">
+                        <span class="upload-field-label">Matter</span>
+                        <select id="matterSelect" name="matter_id"><option value="">Unassigned matter</option></select>
+                    </label>
+                    <button id="uploadButton" class="primary-btn" type="submit">Upload & Analyze</button>
+                </form>
+                <div id="uploadStatus" class="studio-status"></div>
+                {% else %}
+                <div class="role-readonly">Viewer role is read-only. A reviewer or admin must upload, review, redact, and export documents.</div>
+                {% endif %}
+            </section>
+
+            <div class="stats">
+                <div class="stat"><div class="stat-value">{{ stats.total }}</div><div class="stat-label">Documents indexed</div></div>
+                <div class="stat"><div class="stat-value">{{ stats.categories }}</div><div class="stat-label">Document categories</div></div>
+                <div class="stat"><div class="stat-value">{{ stats.clients }}</div><div class="stat-label">Detected clients</div></div>
+                <div class="stat"><div class="stat-value">{{ stats.blocked }}</div><div class="stat-label">External LLM blocked</div></div>
+                <div class="stat"><div class="stat-value">{{ stats.needs_ocr }}</div><div class="stat-label">Needs OCR</div></div>
+            </div>
+
+            <section class="terminology">
+                <strong>Terminology guardrail</strong>
+                <div class="terms">
+                    {% for key, term in terminology.items() %}
+                    <div class="term"><strong>{{ term.label }}</strong><span>{{ term.description }}</span></div>
+                    {% endfor %}
+                </div>
+            </section>
+
+            <div class="results-head">
+                <h2>Documents</h2>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    {% if can_review %}
+                    <button id="reextractFailedBtn" class="primary-btn" type="button" onclick="reextractFailed()" style="min-height: 32px; padding: 0 14px; font-size: 12.5px;">Re-extract failed docs</button>
+                    {% endif %}
+                    <span id="resultCount" class="badge">{{ stats.total }} documents</span>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 27%">Document</th>
+                            <th style="width: 14%">Category</th>
+                            <th style="width: 12%">Client</th>
+                            <th style="width: 9%">Risk</th>
+                            <th class="hide-mobile" style="width: 30%">Status</th>
+                            <th class="hide-mobile" style="width: 8%">Findings</th>
+                        </tr>
+                    </thead>
+                    <tbody id="docTableBody"></tbody>
+                </table>
+            </div>
+            <div id="pager" class="pager" hidden>
+                <button type="button" id="pagerPrev" onclick="changePage(-1)">&#8592; Prev</button>
+                <span id="pagerLabel"></span>
+                <button type="button" id="pagerNext" onclick="changePage(1)">Next &#8594;</button>
+            </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const filters = { search: '', category: '', client: '', risk: '', readiness: '', review_status: '', extraction_status: '', ocr_status: '', file_type: '' };
+        const canReview = {{ 'true' if can_review else 'false' }};
+        const canAdmin = {{ 'true' if can_admin else 'false' }};
+        let debounceTimer = null;
+        let page = 1;
+        const PAGE_SIZE = 50;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeFiltersFromUrl();
+            loadMatterOptions();
+            loadDocuments();
+            const uploadForm = document.getElementById('uploadForm');
+            if (uploadForm) uploadForm.addEventListener('submit', uploadDocument);
+            const uploadFile = document.getElementById('uploadFile');
+            if (uploadFile) uploadFile.addEventListener('change', updateFilePicker);
+            document.getElementById('searchInput').addEventListener('input', (event) => {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    filters.search = event.target.value;
+                    page = 1;
+                    loadDocuments();
+                }, 250);
+            });
+        });
+
+        async function loadMatterOptions() {
+            const select = document.getElementById('matterSelect');
+            if (!select) return;
+            const response = await fetch('/api/matters');
+            if (!response.ok) return;
+            const data = await response.json();
+            select.innerHTML = '<option value="">Unassigned matter</option>' +
+                (data.matters || []).map((matter) => `<option value="${matter.id}">${escapeHtml(matter.name)}</option>`).join('');
+        }
+
+        function updateFilePicker() {
+            const fileInput = document.getElementById('uploadFile');
+            const picker = document.getElementById('filePicker');
+            const name = document.getElementById('filePickerName');
+            const file = fileInput?.files?.[0];
+            picker?.classList.toggle('has-file', Boolean(file));
+            if (name) name.textContent = file?.name || 'No file selected';
+        }
+
+        function initializeFiltersFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            Object.keys(filters).forEach((key) => {
+                if (params.get(key)) filters[key] = params.get(key);
+            });
+        }
+
+        function setFilter(type, value, button) {
+            filters[type] = value;
+            page = 1;
+            document.querySelectorAll(`[data-filter="${type}"]`).forEach((node) => node.classList.remove('active'));
+            button.classList.add('active');
+            loadDocuments();
+        }
+
+        function clearFilters() {
+            Object.keys(filters).forEach((key) => { filters[key] = ''; });
+            const search = document.getElementById('searchInput');
+            if (search) search.value = '';
+            // Re-select each group's "All …" option, which is the one with an
+            // empty data-value, so the sidebar agrees with the reset state.
+            document.querySelectorAll('.filter-btn').forEach((node) => {
+                node.classList.toggle('active', node.dataset.value === '');
+            });
+            page = 1;
+            loadDocuments();
+        }
+
+        async function reextractFailed() {
+            if (!window.confirm('Re-run extraction for every document without complete extraction? Their detector findings are replaced and they return to pending review.')) return;
+            const button = document.getElementById('reextractFailedBtn');
+            button.disabled = true;
+            button.textContent = 'Re-extracting…';
+            try {
+                const response = await fetch('/api/documents/reextract-failed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const data = await response.json();
+                if (!response.ok) {
+                    alert(data.error || 'Re-extraction failed.');
+                    return;
+                }
+                alert(`Re-extraction finished: ${data.recovered} recovered, ${data.still_incomplete} still need OCR/manual review, ${data.missing_file} missing files (of ${data.attempted}).`);
+                page = 1;
+                loadDocuments();
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Re-extract failed docs';
+            }
+        }
+
+        async function loadDocuments() {
+            const params = new URLSearchParams();
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value) params.set(key, value);
+            });
+            params.set('page', String(page));
+            params.set('page_size', String(PAGE_SIZE));
+            const response = await fetch(`/api/documents?${params}`);
+            const data = await response.json();
+            const start = data.total ? (data.page - 1) * data.page_size + 1 : 0;
+            const end = Math.min(data.total, data.page * data.page_size);
+            document.getElementById('resultCount').textContent =
+                data.total > data.page_size ? `${start}–${end} of ${data.total} documents` : `${data.total} documents`;
+            renderDocuments(data.documents);
+            renderPager(data);
+        }
+
+        function renderPager(data) {
+            const pager = document.getElementById('pager');
+            const pages = data.pages || 1;
+            if (pages <= 1) {
+                pager.hidden = true;
+                return;
+            }
+            pager.hidden = false;
+            document.getElementById('pagerLabel').textContent = `Page ${data.page} of ${pages}`;
+            document.getElementById('pagerPrev').disabled = data.page <= 1;
+            document.getElementById('pagerNext').disabled = data.page >= pages;
+            window.pagerPages = pages;
+        }
+
+        function changePage(delta) {
+            const pages = window.pagerPages || 1;
+            page = Math.min(pages, Math.max(1, page + delta));
+            loadDocuments();
+            document.querySelector('.results-head').scrollIntoView({ block: 'nearest' });
+        }
+
+        async function uploadDocument(event) {
+            event.preventDefault();
+            const fileInput = document.getElementById('uploadFile');
+            const status = document.getElementById('uploadStatus');
+            const button = document.getElementById('uploadButton');
+            if (!fileInput.files.length) {
+                status.innerHTML = '<span class="badge ready-Needs">Choose a file</span>';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            const matterSelect = document.getElementById('matterSelect');
+            if (matterSelect && matterSelect.value) formData.append('matter_id', matterSelect.value);
+            button.disabled = true;
+            status.innerHTML = '<span class="badge">Analyzing</span><span>Extracting text and preparing review.</span>';
+            const response = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await response.json().catch(() => ({}));
+            button.disabled = false;
+            if (!response.ok) {
+                status.innerHTML = `<span class="badge ready-Blocked">Upload failed</span><span>${escapeHtml(data.error || 'Unable to analyze file')}</span>`;
+                return;
+            }
+            fileInput.value = '';
+            updateFilePicker();
+            status.innerHTML = `
+                <span class="badge risk-${escapeHtml(data.residual_risk || 'Unknown')}">${escapeHtml(data.residual_risk || 'Unknown')}</span>
+                <span>${escapeHtml(data.filename || 'Document')} ready for review</span>
+            `;
+            window.location.href = `/studio/${data.id}`;
+        }
+
+        function renderDocuments(documents) {
+            const body = document.getElementById('docTableBody');
+            if (!documents.length) {
+                // An empty library and an over-narrow filter look identical in the
+                // table but need opposite actions: upload something, or widen the
+                // filters. Telling a first-run user their filters excluded
+                // everything sends them looking for a filter they never set.
+                const filtered = Object.values(filters).some(Boolean);
+                body.innerHTML = filtered
+                    ? `<tr><td colspan="6">No documents match the current filters. <button type="button" class="link-btn" onclick="clearFilters()">Clear filters</button></td></tr>`
+                    : `<tr><td colspan="6">No documents yet. Upload one above to extract, classify, and privacy-review it.</td></tr>`;
+                return;
+            }
+            body.innerHTML = documents.map((doc) => `
+                <tr onclick="window.location.href='/studio/${doc.id}'">
+                    <td>
+                        <div class="doc-title" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.title || doc.filename)}</div>
+                        <div class="small">${escapeHtml(doc.filepath || '')}</div>
+                    </td>
+                    <td><span class="badge">${escapeHtml(doc.category_icon || 'DOC')} ${escapeHtml(doc.subcategory_name || doc.category_name || '-')}</span></td>
+                    <td>${escapeHtml(doc.client_name || '-')}</td>
+                    <td><span class="badge risk-${escapeHtml(doc.residual_risk || 'Low')}">${escapeHtml(doc.residual_risk || 'Unknown')}</span></td>
+                    <td class="hide-mobile"><span class="pipeline-pill stage-${escapeHtml(doc.pipeline_stage || 'needs_review')}" title="Raw state: ${escapeHtml(doc.review_status || '-')} · extraction ${escapeHtml(doc.extraction_status || '-')} · OCR ${escapeHtml(doc.ocr_status || '-')} · ${escapeHtml(doc.external_llm_readiness || '-')}">${escapeHtml(doc.pipeline_message || doc.review_status || '-')}</span></td>
+                    <td class="hide-mobile">${Number(doc.finding_count || 0)} / ${Number(doc.critical_count || 0)}</td>
+                </tr>
+            `).join('');
+        }
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(String(value ?? '')));
+            return div.innerHTML;
+        }
+
+        async function logout() {
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

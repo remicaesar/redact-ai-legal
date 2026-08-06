@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redact AI — privacy-reviewed legal document redaction</title>
+    <meta name="description" content="Redact AI classifies legal documents, surfaces sensitive identifiers, and prepares privacy-reviewed exports. Local-first, gated on human review.">
+    <link rel="stylesheet" href="{{ url_for('static', filename='workstation.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}">
+</head>
+<body>
+<div class="landing">
+    <div class="landing__orb landing__orb--accent"></div>
+    <div class="landing__orb landing__orb--success"></div>
+
+    <div class="landing__progress"><div class="landing__progress-bar" data-progress></div></div>
+    <canvas class="landing__particles" data-particles aria-hidden="true"></canvas>
+
+    <header class="landing__wrap landing__nav">
+        <a class="landing__brand" href="{{ url_for('landing.welcome') }}">
+            <span class="landing__mark" aria-hidden="true">R</span>
+            <span>Redact AI</span>
+        </a>
+        <nav class="landing__nav-links">
+            <a class="landing__nav-link" href="#features">Product</a>
+            <a class="landing__nav-link" href="#workflow">Workflow</a>
+            <a class="landing__nav-link" href="#security">Security</a>
+            <a class="landing__btn landing__btn--nav" href="{{ url_for('auth.login') }}">Open Workstation</a>
+        </nav>
+    </header>
+
+    <!-- HERO -->
+    <section class="landing__hero">
+        <div class="landing__wrap">
+            <div class="landing__hero-inner">
+                <p class="landing__eyebrow">Privacy-first legal AI</p>
+                <h1 class="landing__title">Redaction, held to a<br><em>human standard.</em></h1>
+                <p class="landing__lede">
+                    Redact AI classifies legal documents, surfaces sensitive identifiers, and prepares
+                    privacy-reviewed exports — without ever calling anything anonymous until a lawyer
+                    has confirmed it actually is.
+                </p>
+                <div class="landing__actions">
+                    <a class="landing__btn landing__btn--primary" href="{{ url_for('auth.login') }}">Open Workstation →</a>
+                    <a class="landing__btn landing__btn--ghost" href="#workflow">See how it works</a>
+                </div>
+                <div class="landing__chips">
+                    <span class="landing__chip">Redacted</span>
+                    <span class="landing__chip">De-identified</span>
+                    <span class="landing__chip">Pseudonymized</span>
+                    <span class="landing__chip">Human review required</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- STATS -->
+    <section class="landing__stats">
+        <div class="landing__wrap landing__stats-grid">
+            {% for stat in stats %}
+            <div data-reveal="{{ loop.index0 * 90 }}">
+                <div class="landing__stat-value">{{ stat.value }}</div>
+                <div class="landing__stat-label">{{ stat.label }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="landing__section" id="features">
+        <div class="landing__wrap">
+            <div class="landing__section-head" data-reveal="0">
+                <p class="landing__kicker landing__kicker--success">Product</p>
+                <h2 class="landing__h2">One workstation for privacy-reviewed legal documents.</h2>
+                <p class="landing__body">From upload to gated export, every stage keeps a reviewer in control and data on the machine it started on.</p>
+            </div>
+            <div class="landing__features">
+                {% for feature in features %}
+                <article class="landing__feature" data-reveal="{{ loop.index0 * 100 }}">
+                    <div class="landing__feature-dot landing__feature-dot--{{ feature.tone }}"></div>
+                    <h3 class="landing__feature-title">{{ feature.title }}</h3>
+                    <p class="landing__feature-text">{{ feature.text }}</p>
+                </article>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <!-- ROTATING CAPABILITY -->
+    <section class="landing__wrap" style="position: relative; z-index: 1; padding-bottom: 96px;">
+        <div class="landing__rotator" data-reveal="0">
+            <span>Privacy teams use Redact AI for</span>
+            <span class="landing__rotator-word" data-rotator='{{ rotating_words | tojson }}'>{{ rotating_words[0] }}</span>
+        </div>
+    </section>
+
+    <!-- WORKFLOW -->
+    <section class="landing__section landing__section--band" id="workflow">
+        <div class="landing__wrap">
+            <div class="landing__section-head" data-reveal="0">
+                <p class="landing__kicker">Workflow</p>
+                <h2 class="landing__h2">Four gated steps, not one black box.</h2>
+            </div>
+            <div class="landing__workflow">
+                <div class="landing__workflow-line"><span data-grow></span></div>
+                {% for step in steps %}
+                <div class="landing__step" data-reveal="{{ loop.index0 * 140 }}">
+                    <div class="landing__step-num" style="animation-delay: {{ 200 + loop.index0 * 220 }}ms;">{{ '%02d' % loop.index }}</div>
+                    <h3 class="landing__step-title">{{ step.title }}</h3>
+                    <p class="landing__step-text">{{ step.text }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <!-- SAFETY GATES -->
+    <section class="landing__section" id="security">
+        <div class="landing__wrap">
+            <div class="landing__section-head" data-reveal="0">
+                <p class="landing__kicker landing__kicker--danger">Safety gates</p>
+                <h2 class="landing__h2">Nothing reaches an external model by default.</h2>
+                <p class="landing__body">
+                    Hosted LLM use is only unlocked once every condition below is true — and detected
+                    findings are never treated as the same thing as completed redaction.
+                </p>
+            </div>
+            <div class="landing__gates">
+                {% for gate in gates %}
+                <div class="landing__gate" data-reveal="{{ loop.index0 * 110 }}">
+                    <p><strong>{{ gate.title }}</strong> — {{ gate.text }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <!-- STANDARDS -->
+    <section class="landing__wrap" style="position: relative; z-index: 1;">
+        <div class="landing__standards" data-reveal="0">
+            <span class="landing__standards-label">Designed around</span>
+            {% for standard in standards %}
+            <span class="landing__standard">{{ standard }}</span>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="landing__wrap">
+        <div class="landing__cta">
+            <div data-reveal="0">
+                <h2 class="landing__cta-title">Bring your first matter into review.</h2>
+                <p class="landing__cta-text">Set up a local workstation and see gated, human-reviewed redaction on your own documents.</p>
+            </div>
+            <a class="landing__btn landing__btn--invert" href="{{ url_for('auth.login') }}">Open Workstation →</a>
+        </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="landing__wrap landing__footer">
+        <div class="landing__footer-brand">
+            <span class="landing__footer-mark" aria-hidden="true">R</span>
+            <span>Redact AI — local-first legal privacy review.</span>
+        </div>
+        <div class="landing__footer-links">
+            <a href="#features">Product</a>
+            <a href="#workflow">Workflow</a>
+            <a href="#security">Security</a>
+            <a href="{{ url_for('auth.login') }}">Log in</a>
+        </div>
+    </footer>
+</div>
+
+<script src="{{ url_for('static', filename='landing.js') }}" defer></script>
+</body>
+</html>

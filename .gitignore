@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+
+db/*.db
+db/*.db-*
+
+accuracy_report.json
+benchmark_report.json
+benchmark_smoke_report.json
+classification_report.json
+
+*.log
+
+data/uploads/
+data/exports/
+
+.claude/
+
+.env
+
+# Client roster and local scan paths are confidential; only the *.example.json
+# templates are committed.
+config/clients.local.json
+config/*.local.json

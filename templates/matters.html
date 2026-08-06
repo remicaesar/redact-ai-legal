@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matters - Redact AI</title>
+    <link rel="stylesheet" href="/static/workstation.css">
+    <style>
+        body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; }
+        header { padding: 22px 28px; background: #fff; border-bottom: 1px solid #d8e0ea; }
+        h1 { margin: 0; font-size: 20px; }
+        h2 { margin: 0; font-size: 15px; }
+        .subtitle { margin-top: 4px; color: #667085; font-size: 13px; }
+        .content { display: grid; gap: 14px; padding: 22px 28px; }
+        .panel { background: #fff; border: 1px solid #d8e0ea; border-radius: 8px; }
+        .panel-pad { padding: 14px; }
+        .matter-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 130px; gap: 10px; margin-top: 12px; }
+        input { min-height: 38px; border: 1px solid #d8e0ea; border-radius: 6px; padding: 0 10px; font: inherit; }
+        button, .button-link { min-height: 38px; border: 1px solid #d8e0ea; border-radius: 6px; background: #fff; color: #17202a; font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 10px; text-decoration: none; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th, td { padding: 11px 12px; border-bottom: 1px solid #d8e0ea; text-align: left; font-size: 13px; overflow-wrap: anywhere; }
+        th { color: #667085; font-size: 11px; text-transform: uppercase; background: #fbfcfe; }
+        .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 3px 8px; border-radius: 6px; background: #eef3f7; color: #475467; font-size: 12px; font-weight: 700; }
+        @media (max-width: 980px) { .matter-form { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="app-sidebar" aria-label="Workstation navigation">
+            <div class="brand-block"><div class="brand-title">Redact AI</div><div class="brand-subtitle">Matter-level privacy operations</div></div>
+            <div class="nav-section">
+                <div class="nav-section-label">Workspace</div>
+                <a class="nav-item" href="/"><span class="nav-icon">D</span>Dashboard</a>
+                <a class="nav-item active" href="/matters"><span class="nav-icon">M</span>Matters</a>
+                <a class="nav-item" href="/?review_status=pending_review"><span class="nav-icon">R</span>Review Queue</a>
+                <a class="nav-item" href="/?ocr_status=queued"><span class="nav-icon">O</span>OCR Queue</a>
+            </div>
+            {% if can_admin %}
+            <div class="nav-section">
+                <div class="nav-section-label">Admin</div>
+                <a class="nav-item" href="/audit-log"><span class="nav-icon">A</span>Audit Log</a>
+                <a class="nav-item" href="/settings"><span class="nav-icon">S</span>Settings</a>
+            </div>
+            {% endif %}
+            <div class="local-only-note" title="All processing, storage, and exports happen on this machine. No document content is sent to any external service.">Local only · data stays on this device</div>
+            <div class="sidebar-footer"><div class="user-role">{{ current_user.username }} · {{ current_user.role }}</div><button class="logout-button" type="button" onclick="logout()">Log out</button></div>
+        </nav>
+        <div class="shell-main">
+            <div class="shell-banner"><strong>Client / matter workspace</strong><div class="trust-strip"><span class="trust-pill">Documents</span><span class="trust-pill">Review Matrix</span><span class="trust-pill">Artifacts</span></div></div>
+            <header><h1>Matters</h1><div class="subtitle">{{ positioning }}</div></header>
+            <main class="content">
+                {% if can_review %}
+                <section class="panel panel-pad">
+                    <h2>Create Matter</h2>
+                    <form class="matter-form" onsubmit="createMatter(event)">
+                        <input id="matterName" placeholder="Matter name">
+                        <input id="matterDescription" placeholder="Description">
+                        <button type="submit">Create</button>
+                    </form>
+                </section>
+                {% endif %}
+                <section class="panel">
+                    <table>
+                        <thead><tr><th style="width: 28%">Matter</th><th>Client</th><th>Status</th><th>Documents</th><th>Review Queue</th><th>OCR</th><th>Critical</th><th>Artifacts</th></tr></thead>
+                        <tbody id="matterRows"><tr><td colspan="8">Loading matters...</td></tr></tbody>
+                    </table>
+                </section>
+            </main>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', loadMatters);
+
+        async function loadMatters() {
+            const response = await fetch('/api/matters');
+            const data = await response.json();
+            const rows = data.matters || [];
+            document.getElementById('matterRows').innerHTML = rows.length ? rows.map((matter) => `
+                <tr onclick="window.location.href='/matter/${matter.id}'">
+                    <td><strong>${escapeHtml(matter.name)}</strong><div class="user-role">${escapeHtml(matter.description || '')}</div></td>
+                    <td>${escapeHtml(matter.client_name || '-')}</td>
+                    <td><span class="badge">${escapeHtml(matter.status || 'active')}</span></td>
+                    <td>${Number(matter.document_count || 0)}</td>
+                    <td>${Number(matter.review_queue_count || 0)}</td>
+                    <td>${Number(matter.needs_ocr_count || 0)}</td>
+                    <td>${Number(matter.critical_finding_count || 0)}</td>
+                    <td>${Number(matter.artifact_count || 0)}</td>
+                </tr>
+            `).join('') : '<tr><td colspan="8">No matters yet.</td></tr>';
+        }
+
+        async function createMatter(event) {
+            event.preventDefault();
+            const response = await fetch('/api/matters', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: document.getElementById('matterName').value, description: document.getElementById('matterDescription').value })
+            });
+            if (response.ok) {
+                document.getElementById('matterName').value = '';
+                document.getElementById('matterDescription').value = '';
+                await loadMatters();
+            } else {
+                const data = await response.json().catch(() => ({}));
+                alert(data.error || 'Matter could not be created.');
+            }
+        }
+
+        function escapeHtml(value) { const div = document.createElement('div'); div.appendChild(document.createTextNode(String(value ?? ''))); return div.innerHTML; }
+        async function logout() { await fetch('/logout', { method: 'POST' }); window.location.href = '/login'; }
+    </script>
+</body>
+</html>

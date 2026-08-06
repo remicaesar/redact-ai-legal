@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ matter_name }} - Redact AI</title>
+    <link rel="stylesheet" href="/static/workstation.css">
+    <style>
+        body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; }
+        header { padding: 22px 28px; background: #fff; border-bottom: 1px solid #d8e0ea; }
+        h1 { margin: 0; font-size: 20px; }
+        h2 { margin: 0 0 10px; font-size: 15px; }
+        .subtitle { margin-top: 4px; color: #667085; font-size: 13px; }
+        .content { display: grid; gap: 14px; padding: 22px 28px; }
+        .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .panel, .stat { background: #fff; border: 1px solid #d8e0ea; border-radius: 8px; }
+        .stat { padding: 14px; }
+        .stat-value { font-size: 26px; font-weight: 800; }
+        .stat-label { color: #667085; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        th, td { padding: 11px 12px; border-bottom: 1px solid #d8e0ea; text-align: left; font-size: 13px; overflow-wrap: anywhere; vertical-align: top; }
+        th { color: #667085; font-size: 11px; text-transform: uppercase; background: #fbfcfe; }
+        .badge { display: inline-flex; min-height: 24px; align-items: center; padding: 3px 8px; border-radius: 6px; background: #eef3f7; color: #475467; font-size: 12px; font-weight: 700; }
+        .risk-High, .blocked { background: #fee4e2; color: #b42318; }
+        .risk-Medium, .needs { background: #fff4df; color: #b45309; }
+        .risk-Low, .ready { background: #e9f7ef; color: #167647; }
+        .tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+        .tabs button { min-height: 36px; border: 1px solid #d8e0ea; border-radius: 6px; background: #fff; font: inherit; font-weight: 700; cursor: pointer; padding: 0 10px; }
+        .tabs button.active { background: #eef3f7; }
+        @media (max-width: 980px) { .stats { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="app-sidebar" aria-label="Workstation navigation">
+            <div class="brand-block"><div class="brand-title">Redact AI</div><div class="brand-subtitle">Matter workspace</div></div>
+            <div class="nav-section">
+                <div class="nav-section-label">Workspace</div>
+                <a class="nav-item" href="/"><span class="nav-icon">D</span>Dashboard</a>
+                <a class="nav-item active" href="/matters"><span class="nav-icon">M</span>Matters</a>
+                <a class="nav-item" href="/?review_status=pending_review"><span class="nav-icon">R</span>Review Queue</a>
+                <a class="nav-item" href="/?ocr_status=queued"><span class="nav-icon">O</span>OCR Queue</a>
+            </div>
+            {% if can_admin %}
+            <div class="nav-section"><div class="nav-section-label">Admin</div><a class="nav-item" href="/audit-log"><span class="nav-icon">A</span>Audit Log</a><a class="nav-item" href="/settings"><span class="nav-icon">S</span>Settings</a></div>
+            {% endif %}
+            <div class="local-only-note" title="All processing, storage, and exports happen on this machine. No document content is sent to any external service.">Local only · data stays on this device</div>
+            <div class="sidebar-footer"><div class="user-role">{{ current_user.username }} · {{ current_user.role }}</div><button class="logout-button" type="button" onclick="logout()">Log out</button></div>
+        </nav>
+        <div class="shell-main">
+            <div class="shell-banner"><strong>Traceability without chatbot drift</strong><div class="trust-strip"><span class="trust-pill">Review Matrix</span><span class="trust-pill">Timeline</span><span class="trust-pill">Evidence Anchors</span></div></div>
+            <header><h1 id="matterTitle">{{ matter_name }}</h1><div id="matterSubtitle" class="subtitle">{{ positioning }}</div></header>
+            <main class="content">
+                <div class="stats">
+                    <div class="stat"><div id="docCount" class="stat-value">0</div><div class="stat-label">Documents</div></div>
+                    <div class="stat"><div id="reviewCount" class="stat-value">0</div><div class="stat-label">Review Queue</div></div>
+                    <div class="stat"><div id="ocrCount" class="stat-value">0</div><div class="stat-label">Needs OCR</div></div>
+                    <div class="stat"><div id="artifactCount" class="stat-value">0</div><div class="stat-label">Artifacts</div></div>
+                </div>
+                <div class="tabs">
+                    <button class="active" type="button" onclick="showTab('documents', this)">Documents</button>
+                    <button type="button" onclick="showTab('matrix', this)">Review Matrix</button>
+                    <button type="button" onclick="showTab('artifacts', this)">Exports & QA</button>
+                </div>
+                <section id="documentsTab" class="panel"><table><thead><tr><th>Document</th><th>Risk</th><th>Workflow</th><th>OCR</th><th>Findings</th><th>Artifacts</th></tr></thead><tbody id="documentRows"></tbody></table></section>
+                <section id="matrixTab" class="panel" style="display:none;"><table><thead><tr><th>Document</th><th>Category</th><th>Risk</th><th>Source</th><th>Status</th><th>Evidence</th><th>QA</th></tr></thead><tbody id="matrixRows"></tbody></table></section>
+                <section id="artifactsTab" class="panel" style="display:none;"><table><thead><tr><th>Time</th><th>Document</th><th>Artifact</th><th>Style</th><th>QA</th><th>Actor</th><th>Metadata</th></tr></thead><tbody id="artifactRows"></tbody></table></section>
+            </main>
+        </div>
+    </div>
+    <script>
+        const matterId = Number({{ matter_id }});
+        document.addEventListener('DOMContentLoaded', () => { loadMatter(); loadMatrix(); });
+
+        async function loadMatter() {
+            const response = await fetch(`/api/matter/${matterId}`);
+            const data = await response.json();
+            document.getElementById('matterTitle').textContent = data.name || 'Matter';
+            document.getElementById('docCount').textContent = data.summary?.document_count || 0;
+            document.getElementById('reviewCount').textContent = data.summary?.review_queue_count || 0;
+            document.getElementById('ocrCount').textContent = data.summary?.needs_ocr_count || 0;
+            document.getElementById('artifactCount').textContent = data.summary?.artifact_count || 0;
+            document.getElementById('documentRows').innerHTML = (data.documents || []).map((doc) => `
+                <tr onclick="window.location.href='/studio/${doc.id}'">
+                    <td><strong>${escapeHtml(doc.title || doc.filename)}</strong><div class="user-role">${escapeHtml(doc.filename)}</div></td>
+                    <td><span class="badge risk-${escapeHtml(doc.residual_risk || 'Unknown')}">${escapeHtml(doc.residual_risk || 'Unknown')}</span></td>
+                    <td>${escapeHtml(doc.review_status || '-')}</td>
+                    <td>${escapeHtml(doc.ocr_status || '-')}</td>
+                    <td>${Number(doc.finding_count || 0)} / ${Number(doc.critical_count || 0)} critical</td>
+                    <td>${Number(doc.artifact_count || 0)}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="6">No documents in this matter.</td></tr>';
+            document.getElementById('artifactRows').innerHTML = (data.artifacts || []).map((artifact) => `
+                <tr>
+                    <td>${escapeHtml(artifact.created_at || '')}</td>
+                    <td>${escapeHtml(artifact.filename || '')}</td>
+                    <td>${escapeHtml(artifact.label || artifact.artifact_type)}</td>
+                    <td>${escapeHtml(artifact.export_style || '-')}</td>
+                    <td>${escapeHtml(artifact.qa_status || '-')}</td>
+                    <td>${escapeHtml(artifact.actor_username || '-')}</td>
+                    <td>${escapeHtml(artifact.metadata || '{}')}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="7">No artifacts yet.</td></tr>';
+        }
+
+        async function loadMatrix() {
+            const response = await fetch(`/api/matter/${matterId}/review-matrix`);
+            const data = await response.json();
+            document.getElementById('matrixRows').innerHTML = (data.rows || []).map((row) => `
+                <tr>
+                    <td>${escapeHtml(row.filename || '')}</td>
+                    <td>${escapeHtml(row.category || '-')}</td>
+                    <td><span class="badge risk-${escapeHtml(row.risk || 'Unknown')}">${escapeHtml(row.risk || '-')}</span></td>
+                    <td>${escapeHtml(row.source || '-')}</td>
+                    <td>${escapeHtml(row.finding_review_status || row.document_review_status || '-')}</td>
+                    <td>${escapeHtml(row.context || row.source_part || '-')}</td>
+                    <td>${escapeHtml(row.latest_qa_status || row.verification_status || '-')}</td>
+                </tr>
+            `).join('') || '<tr><td colspan="7">No review rows yet.</td></tr>';
+        }
+
+        function showTab(name, button) {
+            document.querySelectorAll('.tabs button').forEach((node) => node.classList.remove('active'));
+            button.classList.add('active');
+            ['documents', 'matrix', 'artifacts'].forEach((tab) => {
+                document.getElementById(`${tab}Tab`).style.display = tab === name ? '' : 'none';
+            });
+        }
+        function escapeHtml(value) { const div = document.createElement('div'); div.appendChild(document.createTextNode(String(value ?? ''))); return div.innerHTML; }
+        async function logout() { await fetch('/logout', { method: 'POST' }); window.location.href = '/login'; }
+    </script>
+</body>
+</html>

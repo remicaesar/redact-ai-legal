@@ -1,0 +1,3925 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ filename }} - Redact AI</title>
+    <link rel="stylesheet" href="/static/workstation.css">
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f5f6f8;
+            --panel: #ffffff;
+            --soft: #fafbfc;
+            --line: #e4e7ec;
+            --text: #1b1f24;
+            --muted: #667085;
+            --blue: #0879d9;
+            --green: #167647;
+            --amber: #b45309;
+            --red: #b42318;
+            --ink: #263241;
+            --shadow: 0 1px 2px rgba(20, 20, 15, 0.05);
+            --shadow-md: 0 1px 3px rgba(20, 20, 15, 0.07), 0 10px 30px rgba(20, 20, 15, 0.05);
+        }
+        * { box-sizing: border-box; }
+        .studio-app [hidden] { display: none !important; }
+        body {
+            margin: 0;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: center;
+            min-height: 54px;
+            padding: 0 24px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+        }
+        h1 { margin: 0; font-size: 15px; letter-spacing: 0; }
+        h2 { margin: 0 0 10px; font-size: 14px; letter-spacing: 0; }
+        h3 { margin: 0; font-size: 13px; letter-spacing: 0; }
+        a { color: var(--blue); text-decoration: none; }
+        .subtle { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+        .workspace {
+            display: grid;
+            grid-template-columns: minmax(230px, 286px) minmax(440px, 1fr) minmax(320px, 376px);
+            gap: 0;
+            padding: 0;
+            min-height: calc(100vh - 108px);
+        }
+        .panel {
+            background: var(--panel);
+            border: 0;
+            border-right: 1px solid var(--line);
+            border-radius: 0;
+            min-width: 0;
+        }
+        .panel-pad {
+            margin: 12px;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+        .stack {
+            display: block;
+            align-content: start;
+            background: var(--soft);
+            overflow: auto;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            background: var(--soft);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .risk-Low, .ready { background: #e9f7ef; color: var(--green); }
+        .risk-Medium, .needs { background: #fff4df; color: var(--amber); }
+        .risk-High, .blocked { background: #fee4e2; color: var(--red); }
+        .risk-Unknown { background: #f2f4f7; color: var(--ink); }
+        .field {
+            display: grid;
+            gap: 3px;
+            padding: 9px 0;
+            border-bottom: 1px solid var(--line);
+        }
+        .field:last-child { border-bottom: 0; }
+        .field label {
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+        .field div { font-size: 13px; overflow-wrap: anywhere; }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        button, .button-link {
+            min-height: 36px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #fff;
+            color: var(--text);
+            cursor: pointer;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 650;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 7px 10px;
+            text-align: center;
+        }
+        button:hover, .button-link:hover { background: var(--soft); }
+        button.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+        button.primary:hover { background: #0a6ec2; }
+        button.approve { border-color: var(--green); background: var(--green); color: #fff; }
+        button.approve:hover { background: #115c38; }
+        button.danger { border-color: #f3b4ae; color: var(--red); }
+        button.danger:hover { background: #fdeceb; }
+        .pipeline-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            max-width: 100%;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 600;
+            background: #fff4df;
+            color: var(--amber);
+            border: 1px solid #f4ddb0;
+        }
+        .pipeline-pill.stage-ready { background: #e9f7ef; color: var(--green); border-color: #bfe5cf; }
+        .pipeline-pill.stage-blocked { background: #fee4e2; color: var(--red); border-color: #f3b4ae; }
+        .pipeline-pill.stage-ocr_review, .pipeline-pill.stage-needs_ocr { background: #eef4fb; color: var(--blue); border-color: #c8ddf2; }
+        .gate-export-primary {
+            border: none;
+            background: var(--green);
+            color: #fff;
+            font-weight: 650;
+        }
+        .gate-export-primary:hover { background: #115c38; color: #fff; }
+        .ocr-review {
+            margin: 12px;
+            border: 1px solid #f4ddb0;
+            border-radius: 8px;
+            background: #fffaf0;
+            padding: 12px;
+            display: grid;
+            gap: 10px;
+        }
+        .ocr-review-page {
+            white-space: pre-wrap;
+            background: #fff;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 260px;
+            overflow: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .ocr-review-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .pdf-suggest {
+            border: 1px solid #c8ddf2;
+            border-radius: 8px;
+            background: #eef4fb;
+            padding: 12px;
+            display: grid;
+            gap: 9px;
+            font-size: 13px;
+        }
+        .export-options summary {
+            cursor: pointer;
+            font-size: 12.5px;
+            color: var(--muted);
+            padding: 6px 0;
+        }
+        button:disabled, .button-link.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .gate-list {
+            display: grid;
+            gap: 7px;
+            margin-top: 8px;
+        }
+        .gate-item, .qa-item {
+            padding: 8px;
+            border-radius: 6px;
+            background: var(--soft);
+            border: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .qa-list {
+            display: grid;
+            gap: 7px;
+            margin-top: 8px;
+        }
+        .qa-item strong {
+            display: block;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+        .preview-shell {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            /* Sized by the .workspace grid row, never by a guess at how tall the
+               chrome above it is. This was min-height: calc(100vh - 89px), but
+               the topbar is 118px, so the panel demanded 29px more than the row
+               it sits in. Every ancestor up to <body> is overflow:hidden, so
+               that surplus was simply cut off -- the bottom of the review panel
+               ("Add finding", export details) became unreachable with no
+               scrollbar anywhere to get to it. */
+            min-height: 0;
+            background: var(--bg);
+            border-right: 1px solid var(--line);
+        }
+        .preview-head {
+            min-height: 46px;
+            padding: 10px 22px;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .preview {
+            width: min(720px, calc(100% - 48px));
+            min-height: min(940px, calc(100vh - 190px));
+            margin: 28px auto 48px;
+            padding: 54px 60px 64px;
+            white-space: pre-wrap;
+            overflow: auto;
+            line-height: 1.72;
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 16px;
+            background: var(--panel);
+            color: var(--text);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            box-shadow: var(--shadow-md);
+        }
+        .pdf-review {
+            display: none;
+            gap: 12px;
+            padding: 14px;
+            overflow: auto;
+            background: #f8fafc;
+        }
+        .pdf-warning {
+            border: 1px solid #f6c56f;
+            background: #fff8e7;
+            color: #8a4b05;
+            border-radius: 6px;
+            padding: 9px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .pdf-page {
+            position: relative;
+            width: max-content;
+            margin: 0 auto 14px;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+            background: #fff;
+        }
+        .pdf-region {
+            position: absolute;
+            border: 2px solid #111827;
+            background: rgba(17, 24, 39, 0.72);
+            pointer-events: auto;
+        }
+        .pdf-region.pending { border-color: #b45309; background: rgba(180, 83, 9, 0.28); }
+        .pdf-region.approved { border-color: #111827; background: rgba(0, 0, 0, 0.82); }
+        .pdf-region.rejected { border-color: #b42318; background: rgba(180, 35, 24, 0.12); }
+        .pdf-region.manual { outline: 2px dashed #2563eb; }
+        .pdf-toolbar {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .pdf-region-list {
+            display: grid;
+            gap: 8px;
+        }
+        .pdf-region-card {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px;
+            background: #fff;
+            font-size: 12px;
+        }
+        .manual-region-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .manual-region-grid input {
+            min-height: 34px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 0 8px;
+            font: inherit;
+            font-size: 12px;
+        }
+        .pdf-nav {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+        .pdf-nav button {
+            min-height: 30px;
+            padding: 0 10px;
+        }
+        .pdf-page-input {
+            width: 52px;
+            min-height: 30px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            text-align: center;
+            font: inherit;
+            font-size: 12px;
+        }
+        .pdf-draw-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .pdf-draw-label select, .pdf-selection select, .pdf-selection input {
+            min-height: 32px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            font: inherit;
+            font-size: 12px;
+            padding: 0 6px;
+            background: #fff;
+        }
+        .pdf-selection {
+            border: 1px solid #2563eb;
+            border-radius: 6px;
+            padding: 10px;
+            background: #eef4ff;
+            display: grid;
+            gap: 8px;
+            font-size: 12px;
+        }
+        .pdf-selection[hidden] { display: none; }
+        .pdf-selection-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .pdf-advanced summary {
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--muted, #64748b);
+        }
+        .pdf-page canvas { display: block; }
+        .pdf-page.drawable canvas { cursor: crosshair; }
+        .pdf-region.selected {
+            outline: 3px solid #2563eb;
+            outline-offset: 1px;
+            z-index: 5;
+        }
+        .pdf-region.dragging { opacity: 0.8; }
+        .pdf-region-handle {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #2563eb;
+            border: 1px solid #fff;
+            border-radius: 2px;
+            z-index: 6;
+        }
+        .pdf-region-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+        .pdf-region-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+        .pdf-region-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+        .pdf-region-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+        .pdf-region-draft {
+            position: absolute;
+            border: 2px dashed #2563eb;
+            background: rgba(37, 99, 235, 0.15);
+            pointer-events: none;
+            z-index: 7;
+        }
+        .pdf-page-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--muted, #64748b);
+            width: max-content;
+            margin: 0 auto 4px;
+        }
+        .qa-thumbs {
+            display: flex;
+            gap: 10px;
+            margin-top: 6px;
+        }
+        .qa-thumbs figure {
+            margin: 0;
+            font-size: 11px;
+            text-align: center;
+        }
+        .qa-thumbs img {
+            display: block;
+            max-width: 220px;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+        }
+        .stepper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 4px 0 2px;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: #fff;
+            font-size: 12px;
+            cursor: pointer;
+            color: #475569;
+        }
+        .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #e2e8f0;
+            font-weight: 600;
+            font-size: 11px;
+        }
+        .step.done { border-color: #15803d; color: #15803d; background: #f0fdf4; }
+        .step.done .step-num { background: #15803d; color: #fff; }
+        .step.active { border-color: #2563eb; color: #1d4ed8; background: #eef4ff; font-weight: 600; }
+        .step.active .step-num { background: #2563eb; color: #fff; }
+        .stepper-hint {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 12.5px;
+            color: var(--color-accent);
+            background: var(--color-accent-soft);
+            border: 1px solid var(--color-border-strong);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 10px;
+        }
+        .stepper-hint:empty { display: none; }
+        .stepper-hint-text { flex: 1 1 auto; min-width: 0; }
+        /* The workflow's primary action lives here, so it must outrank the
+           sentence next to it rather than read as part of the prose. */
+        .stepper-cta {
+            flex: 0 0 auto;
+            min-height: 30px;
+            padding: 0 14px;
+            border: 0;
+            border-radius: var(--radius-sm);
+            background: var(--color-accent);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .stepper-cta:hover { background: var(--color-accent-hover); }
+        .stepper-complete {
+            flex: 0 0 auto;
+            padding: 2px 9px;
+            border-radius: var(--radius-pill);
+            background: var(--color-success-soft);
+            color: var(--color-success);
+            font-weight: 700;
+            font-size: 11px;
+        }
+
+        /* --- grouped review ------------------------------------------------ */
+        .group-intro { padding: 0 2px 10px; }
+        .review-groups { display: grid; gap: 10px; }
+        .review-group {
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            background: var(--color-surface);
+            padding: 12px;
+        }
+        .review-group.is-done { opacity: 0.72; }
+        .review-group-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .review-group-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 13px;
+        }
+        .review-group-status { font-size: 11.5px; }
+        .review-group-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .review-group-actions button { min-height: 32px; font-size: 12px; }
+        .review-group-detail { margin-top: 8px; }
+        .review-group-detail summary {
+            cursor: pointer;
+            font-size: 11.5px;
+            color: var(--color-text-muted);
+        }
+        .review-group-list {
+            list-style: none;
+            margin: 8px 0 0;
+            padding: 0;
+            display: grid;
+            gap: 4px;
+            max-height: 240px;
+            overflow: auto;
+        }
+        .review-group-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            background: var(--color-surface-soft);
+            font-size: 12px;
+            text-align: left;
+            cursor: pointer;
+        }
+        .review-group-item:hover { border-color: var(--color-accent); }
+        .review-group-sample {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+        @keyframes skeletonPulse {
+            0% { opacity: 0.55; }
+            50% { opacity: 1; }
+            100% { opacity: 0.55; }
+        }
+        .skeleton-line {
+            height: 13px;
+            border-radius: 6px;
+            background: #e7eaee;
+            animation: skeletonPulse 1.3s ease-in-out infinite;
+            margin: 10px 0;
+        }
+        .skeleton-line.w60 { width: 60%; }
+        .skeleton-line.w85 { width: 85%; }
+        .skeleton-line.w75 { width: 75%; }
+        .skeleton-line.w40 { width: 40%; }
+        .panel-summary {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            list-style-position: outside;
+        }
+        .panel-summary h2 { display: inline; margin: 0; }
+        .queue-item { cursor: pointer; }
+        .queue-item.selected {
+            outline: 2px solid #2563eb;
+            outline-offset: -1px;
+            border-radius: 6px;
+            background: #eef4ff;
+        }
+        .queue-boxes {
+            font-size: 11.5px;
+            color: #64748b;
+            margin-top: 2px;
+        }
+        .finding-why {
+            margin-top: var(--space-2);
+            border-top: 1px solid var(--line);
+            padding-top: var(--space-2);
+        }
+        .finding-why > summary {
+            cursor: pointer;
+            font-size: var(--text-xs);
+            font-weight: 600;
+            color: var(--blue);
+            list-style: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .finding-why > summary::before {
+            content: "›";
+            display: inline-block;
+            transition: transform 0.15s ease;
+        }
+        .finding-why[open] > summary::before { transform: rotate(90deg); }
+        .why-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 3px var(--space-2);
+            margin: var(--space-2) 0 0;
+            font-size: var(--text-xs);
+            line-height: 1.5;
+        }
+        .why-grid dt {
+            font-weight: 650;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+        .why-grid dd { margin: 0; color: var(--text); }
+        .why-grid code {
+            font-size: 0.92em;
+            background: var(--soft);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 0 4px;
+        }
+        .group-actions {
+            display: flex;
+            gap: 6px;
+            margin: 2px 0 8px;
+        }
+        .group-actions button {
+            flex: 1;
+            min-height: 28px;
+            padding: 0 10px;
+            font-size: 11.5px;
+            font-weight: 550;
+        }
+        .doc-view-controls {
+            display: flex;
+            gap: 6px;
+        }
+        .doc-view-controls button {
+            min-height: 30px;
+            padding: 0 12px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: var(--soft);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 550;
+        }
+        .doc-view {
+            overflow-y: auto;
+            padding: 28px 24px 48px;
+            background: var(--bg);
+        }
+        .doc-paper {
+            max-width: 680px;
+            margin: 0 auto;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            box-shadow: var(--shadow-md, 0 1px 3px rgba(20, 20, 15, 0.07), 0 4px 16px rgba(20, 20, 15, 0.05));
+            padding: 48px 52px 56px;
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 16px;
+            line-height: 1.75;
+            color: var(--text);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        .doc-span {
+            cursor: pointer;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
+        .doc-span.pending {
+            background: #fdf3e0;
+            box-shadow: inset 0 -2px 0 #b45309;
+        }
+        .doc-span.approved.chip {
+            background: rgba(8, 121, 217, 0.09);
+            color: var(--blue);
+            font-size: 0.78em;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 4px;
+            letter-spacing: 0.01em;
+            font-family: system-ui, sans-serif;
+            vertical-align: 1px;
+        }
+        .doc-span.approved.blackbox {
+            background: var(--text);
+            color: transparent;
+            border-radius: 2px;
+            user-select: none;
+        }
+        .doc-span.rejected {
+            box-shadow: inset 0 -1px 0 #a3a39a;
+            color: var(--muted);
+        }
+        .doc-span.selected {
+            outline: 2px solid var(--blue);
+        }
+        .finding.selectable { cursor: pointer; }
+        .finding.selected {
+            border-color: var(--blue);
+            background: rgba(8, 121, 217, 0.06);
+        }
+        .export-gate {
+            border-top: 1px solid var(--line);
+            padding: 14px 16px 16px;
+            background: var(--soft);
+            display: grid;
+            gap: 7px;
+        }
+        .export-gate:empty { display: none; }
+        .export-gate-title {
+            font-size: 11px;
+            font-weight: 650;
+            letter-spacing: 0.07em;
+            text-transform: uppercase;
+            color: #98a2b3;
+        }
+        .gate-row {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            font-size: 12.5px;
+        }
+        .gate-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 700;
+            background: var(--panel);
+            color: #a3a39a;
+            border: 1px solid var(--line);
+        }
+        .gate-dot.ok {
+            background: #e8f4ed;
+            color: #167647;
+            border: none;
+        }
+        .gate-row .gate-label { flex: 1; }
+        .gate-row .gate-detail { font-size: 11.5px; color: #98a2b3; }
+        .export-gate .gate-action {
+            width: 100%;
+            min-height: 36px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+        .export-gate .gate-approve {
+            border: 1px solid var(--blue);
+            background: var(--panel);
+            color: var(--blue);
+        }
+        .export-gate a.gate-export {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            background: var(--blue);
+            color: #fff;
+            text-decoration: none;
+        }
+        .export-gate a.gate-export.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+        .export-gate a.gate-export.exported {
+            background: #e8f4ed;
+            color: #167647;
+        }
+        .finding-head {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            padding: 14px;
+        }
+        .finding-list {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            max-height: calc(100vh - 179px);
+            overflow: auto;
+        }
+        .group {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+            box-shadow: var(--shadow);
+        }
+        .group-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            align-items: center;
+            padding: 9px 10px;
+            background: #fbfcfe;
+            border-bottom: 1px solid var(--line);
+        }
+        .finding {
+            display: grid;
+            gap: 7px;
+            padding: 11px 12px;
+            border-bottom: 1px solid var(--line);
+            transition: background 0.12s ease, opacity 0.12s ease;
+        }
+        .finding:hover { background: var(--soft); }
+        .finding:last-child { border-bottom: 0; }
+        .finding-sample {
+            font-size: 13px;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+        }
+        .finding-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .finding-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 7px;
+        }
+        .manual-form {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            border-top: 1px solid var(--line);
+            background: var(--soft);
+        }
+        .manual-form input {
+            width: 100%;
+            min-height: 36px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 0 10px;
+            font: inherit;
+            font-size: 13px;
+        }
+        .toast {
+            position: fixed;
+            right: 14px;
+            bottom: 14px;
+            max-width: min(420px, calc(100vw - 28px));
+            padding: 11px 12px;
+            background: var(--ink);
+            color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 12px 34px rgba(15, 23, 42, 0.2);
+            display: none;
+            font-size: 13px;
+        }
+        .toast.show { display: flex; align-items: center; gap: 12px; }
+        .toast-action {
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            background: transparent;
+            color: #fff;
+            border-radius: 6px;
+            padding: 4px 12px;
+            font: inherit;
+            font-size: 12.5px;
+            font-weight: 650;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .toast-action:hover { background: rgba(255, 255, 255, 0.12); }
+        /* Tablet: drop to two columns (document + findings); details fold into findings via tabs. */
+        @media (max-width: 1120px) and (min-width: 861px) {
+            .workspace { grid-template-columns: minmax(360px, 1fr) minmax(300px, 360px); }
+            .stack { display: none; }
+            .workspace[data-mobile-tab="details"] .stack { display: block; grid-column: 1 / -1; }
+            .workspace[data-mobile-tab="details"] [data-col="document"],
+            .workspace[data-mobile-tab="details"] [data-col="findings"] { display: none; }
+            .pdf-toolbar, .manual-region-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* Mobile tab bar: shown only on narrow screens. */
+        .mobile-tabs { display: none; }
+
+        @media (max-width: 860px) {
+            .mobile-tabs {
+                display: flex;
+                gap: var(--space-1);
+                padding: var(--space-2) var(--space-3);
+                position: sticky;
+                top: 0;
+                z-index: 20;
+                background: var(--bg);
+                border-bottom: 1px solid var(--line);
+            }
+            .mobile-tab {
+                flex: 1;
+                min-height: 40px;
+                border: 1px solid var(--line);
+                border-radius: var(--radius);
+                background: var(--panel);
+                color: var(--muted);
+                font: inherit;
+                font-size: var(--text-sm);
+                font-weight: 600;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 5px;
+            }
+            .mobile-tab.active {
+                border-color: var(--blue);
+                color: var(--blue);
+                background: rgba(8, 121, 217, 0.08);
+            }
+            .mobile-tab-count:empty { display: none; }
+            .mobile-tab-count {
+                min-width: 18px;
+                padding: 0 5px;
+                border-radius: var(--radius-pill);
+                background: var(--amber);
+                color: #fff;
+                font-size: 10px;
+                line-height: 18px;
+            }
+            .mobile-tab.active .mobile-tab-count { background: var(--blue); }
+
+            .workspace {
+                grid-template-columns: 1fr;
+                min-height: 0;
+            }
+            /* Only the active column is shown; each fills the viewport and scrolls internally. */
+            .workspace > [data-col] { display: none; border-right: 0; }
+            .workspace[data-mobile-tab="document"] [data-col="document"],
+            .workspace[data-mobile-tab="findings"] [data-col="findings"],
+            .workspace[data-mobile-tab="details"] [data-col="details"] { display: block; }
+            .preview-shell {
+                min-height: 0;
+                height: calc(100vh - 210px);
+            }
+            .doc-view, #previewText, .pdf-review { max-height: calc(100vh - 300px); overflow: auto; }
+            .finding-list { max-height: none; }
+            .pdf-toolbar, .manual-region-grid { grid-template-columns: 1fr 1fr; }
+            /* Sidebar collapses to a slim top strip via workstation.css; keep studio chrome compact. */
+            .shell-banner { display: none; }
+            header { padding: var(--space-3) var(--space-4); }
+            .stepper { padding: var(--space-2) var(--space-3); overflow-x: auto; }
+        }
+
+        /* Document workspace redesign: three panels around a dominant canvas. */
+        .studio-app {
+            overflow: hidden;
+            background: var(--color-canvas);
+        }
+        .studio-app .shell-main {
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr);
+            overflow: hidden;
+        }
+        .studio-app .shell-banner { display: none; }
+        .studio-topbar {
+            position: relative;
+            min-height: 72px;
+            padding: 10px 18px;
+            background: var(--color-surface);
+            border-bottom: 1px solid var(--color-border);
+            z-index: 30;
+        }
+        .studio-title-block {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+        .studio-breadcrumbs {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--color-text-muted);
+            font-size: 11px;
+        }
+        .studio-breadcrumbs a { color: inherit; }
+        .studio-document-title {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            min-width: 0;
+        }
+        .studio-document-title h1 {
+            flex: 0 0 auto;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .studio-document-title #docTitle {
+            min-width: 0;
+            overflow: hidden;
+            color: var(--color-text);
+            font-size: 14px;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .studio-top-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 0 0 auto;
+        }
+        .studio-top-actions button,
+        .studio-top-actions .button-link { min-height: 34px; }
+        .studio-progress-bar {
+            min-height: 46px;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 12px;
+            padding: 7px 18px;
+            background: var(--color-surface-soft);
+            border-bottom: 1px solid var(--color-border);
+        }
+        .studio-progress-bar .stepper {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            margin: 0;
+            scrollbar-width: thin;
+        }
+        .studio-progress-bar .step {
+            min-height: 30px;
+            flex: 0 0 auto;
+            padding: 4px 9px;
+            border-radius: var(--radius-pill);
+            font-size: 11px;
+        }
+        .studio-progress-bar .step-num { width: 17px; height: 17px; font-size: 9px; }
+        .studio-progress-bar .stepper-hint {
+            max-width: 420px;
+            margin: 0;
+            padding: 6px 9px;
+            overflow: hidden;
+            border: 0;
+            background: transparent;
+            color: var(--color-text-muted);
+            font-size: 11px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .workspace {
+            --left-panel-width: 272px;
+            --right-panel-width: 360px;
+            height: 100%;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: var(--left-panel-width) 5px minmax(440px, 1fr) 5px var(--right-panel-width);
+            background: #dedbd3;
+            overflow: hidden;
+        }
+        .workspace.left-collapsed { --left-panel-width: 52px !important; }
+        .workspace.right-collapsed { --right-panel-width: 52px !important; }
+        .workspace-panel {
+            min-width: 0;
+            height: 100%;
+            overflow: hidden;
+            background: var(--color-surface);
+        }
+        .workspace-left,
+        .review-assistant {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+        }
+        .panel-resizer {
+            position: relative;
+            z-index: 8;
+            border: 0;
+            border-radius: 0;
+            padding: 0;
+            min-height: 0;
+            width: 5px;
+            background: #dedbd3;
+            box-shadow: none;
+            cursor: col-resize;
+            touch-action: none;
+        }
+        .panel-resizer::after {
+            position: absolute;
+            top: 50%;
+            left: 1px;
+            width: 3px;
+            height: 38px;
+            border-radius: 3px;
+            background: var(--color-border-strong);
+            content: "";
+            opacity: 0;
+            transform: translateY(-50%);
+            transition: opacity 120ms ease;
+        }
+        .panel-resizer:hover::after,
+        .panel-resizer:focus-visible::after { opacity: 1; }
+        .panel-resizer.dragging::after { opacity: 1; background: var(--color-accent); }
+        body.is-resizing-panel,
+        body.is-resizing-panel * { cursor: col-resize !important; user-select: none !important; }
+        .workspace-panel-head {
+            min-height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--color-border);
+            background: var(--color-surface);
+        }
+        .workspace-panel-head h2 { margin: 0; font-size: 13px; }
+        .panel-icon-button {
+            width: 32px;
+            min-width: 32px;
+            min-height: 32px;
+            padding: 0;
+            border-color: transparent;
+            box-shadow: none;
+        }
+        .collapsed-panel-label {
+            display: none;
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            color: var(--color-text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .workspace.left-collapsed .workspace-left .left-panel-content,
+        .workspace.right-collapsed .review-assistant .assistant-content { display: none; }
+        .workspace.left-collapsed .workspace-left .workspace-panel-head,
+        .workspace.right-collapsed .review-assistant .workspace-panel-head {
+            height: 100%;
+            flex-direction: column;
+            justify-content: flex-start;
+            padding: 10px;
+        }
+        .workspace.left-collapsed .workspace-left .panel-heading-copy,
+        .workspace.right-collapsed .review-assistant .panel-heading-copy { display: none; }
+        .workspace.left-collapsed .workspace-left .collapsed-panel-label,
+        .workspace.right-collapsed .review-assistant .collapsed-panel-label { display: block; margin-top: 12px; }
+        .left-panel-content,
+        .assistant-content {
+            min-height: 0;
+            overflow: auto;
+            scrollbar-width: thin;
+        }
+        .left-panel-section {
+            padding: 12px;
+            border-bottom: 1px solid var(--color-border);
+        }
+        .left-panel-section h3 {
+            margin-bottom: 8px;
+            color: var(--color-text-muted);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .matter-link {
+            display: block;
+            color: var(--color-text);
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .matter-documents {
+            display: grid;
+            gap: 3px;
+            margin-top: 8px;
+        }
+        .matter-document-link {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 6px;
+            padding: 7px 8px;
+            border-radius: var(--radius-sm);
+            color: var(--color-text-muted);
+            font-size: 11.5px;
+            text-decoration: none;
+        }
+        .matter-document-link:hover { background: var(--color-surface-soft); }
+        .matter-document-link.active {
+            background: var(--color-accent-soft);
+            color: var(--color-accent);
+            font-weight: 600;
+        }
+        .matter-document-link span:first-child {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .section-nav { display: grid; gap: 2px; }
+        .section-nav button {
+            min-height: 34px;
+            justify-content: flex-start;
+            padding: 0 8px;
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            color: var(--color-text-muted);
+            font-size: 12px;
+        }
+        .section-nav button:hover { background: var(--color-surface-soft); color: var(--color-text); }
+        .compact-status {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .compact-status .field {
+            min-width: 0;
+            padding: 7px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            background: var(--color-surface-soft);
+        }
+        .compact-status .field label { font-size: 9px; }
+        .compact-status .field div { font-size: 11px; }
+        .workspace-center {
+            position: relative;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            background: #d9d6ce;
+        }
+        .workspace-center .preview-head {
+            min-height: 54px;
+            padding: 8px 14px;
+            border: 0;
+            border-bottom: 1px solid var(--color-border);
+        }
+        .workspace-center .preview-shell { height: 100%; min-height: 0; border: 0; }
+        .workspace-center .doc-view,
+        .workspace-center #previewText,
+        .workspace-center .pdf-review { min-height: 0; }
+        .workspace-center .doc-view { background: #d9d6ce; }
+        .workspace-center .doc-paper {
+            max-width: 760px;
+            min-height: calc(100% - 56px);
+            box-shadow: 0 16px 42px rgba(29, 29, 27, 0.13);
+        }
+        .workspace-center .pdf-review { background: #d9d6ce; }
+        .assistant-mode-switch {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3px;
+            padding: 3px;
+            border-radius: var(--radius);
+            background: var(--color-surface-soft);
+        }
+        .assistant-mode-switch button {
+            min-height: 30px;
+            padding: 0 8px;
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            color: var(--color-text-muted);
+            font-size: 11px;
+        }
+        .assistant-mode-switch button.active {
+            background: var(--color-surface);
+            color: var(--color-text);
+            box-shadow: var(--shadow);
+        }
+        .assistant-summary {
+            display: grid;
+            gap: 8px;
+            padding: 12px;
+            border-bottom: 1px solid var(--color-border);
+        }
+        .assistant-risk-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .assistant-next-action {
+            padding: 9px 10px;
+            border: 1px solid #d9d5ef;
+            border-radius: var(--radius);
+            background: var(--color-accent-soft);
+            color: #3f377e;
+            font-size: 11.5px;
+            line-height: 1.45;
+        }
+        .assistant-pane { min-height: 0; }
+        .assistant-card {
+            display: grid;
+            gap: 11px;
+            margin: 12px;
+            padding: 14px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-lg);
+            background: var(--color-surface);
+            box-shadow: var(--shadow);
+        }
+        .assistant-card:focus-visible { box-shadow: var(--focus-ring), var(--shadow); }
+        .assistant-card-title { font-size: 15px; font-weight: 600; line-height: 1.35; }
+        .assistant-explanation {
+            color: var(--color-text-muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+        .assistant-fields { display: grid; gap: 9px; }
+        .assistant-field label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--color-text-muted);
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .assistant-field input,
+        .assistant-field textarea { min-height: 36px; font-size: 12px; }
+        .assistant-field textarea { min-height: 68px; resize: vertical; }
+        .assistant-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 7px;
+        }
+        .assistant-actions button { min-height: 38px; }
+        .assistant-nav {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .assistant-nav button { min-height: 30px; padding: 0 10px; font-size: 11px; }
+        .assistant-shortcuts {
+            color: var(--color-text-faint);
+            font-size: 10px;
+            text-align: center;
+        }
+        .assistant-queue-disclosure,
+        .assistant-technical {
+            margin: 0 12px 12px;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+            background: var(--color-surface);
+        }
+        .assistant-queue-disclosure > summary,
+        .assistant-technical > summary {
+            padding: 9px 10px;
+            cursor: pointer;
+            color: var(--color-text-muted);
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .assistant-queue-disclosure .finding-list { max-height: 320px; }
+        .assistant-technical-content { border-top: 1px solid var(--color-border); }
+        .assistant-technical-content .panel-pad {
+            margin: 0;
+            border: 0;
+            border-bottom: 1px solid var(--color-border);
+            border-radius: 0;
+            box-shadow: none;
+        }
+        .bulk-pane { padding: 12px; }
+        .bulk-toolbar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 7px;
+            margin-bottom: 10px;
+        }
+        .bulk-table-wrap {
+            max-height: calc(100vh - 330px);
+            overflow: auto;
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius);
+        }
+        .bulk-review-table { width: 100%; min-width: 620px; table-layout: auto; }
+        .bulk-review-table th,
+        .bulk-review-table td { padding: 8px; font-size: 11px; vertical-align: top; }
+        .bulk-review-table th { position: sticky; top: 0; z-index: 1; background: var(--color-surface-soft); }
+        .bulk-review-table tr.selected { background: var(--color-accent-soft); }
+        .bulk-review-table button { min-height: 28px; padding: 0 8px; font-size: 10px; }
+        .studio-empty,
+        .studio-failure {
+            margin: 12px;
+            padding: 18px;
+            border: 1px dashed var(--color-border-strong);
+            border-radius: var(--radius);
+            background: var(--color-surface-soft);
+            color: var(--color-text-muted);
+            font-size: 12px;
+            line-height: 1.5;
+            text-align: center;
+        }
+        .studio-failure { border-style: solid; border-color: #e3b5b2; background: var(--color-danger-soft); color: var(--color-danger); }
+        .toast { z-index: 200; }
+
+        @media (max-width: 1480px) and (min-width: 981px) {
+            .studio-app .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
+            .studio-app .app-sidebar { padding: 14px 8px; }
+            .studio-app .brand-block { grid-template-columns: 1fr; padding: 0 0 14px; }
+            .studio-app .brand-block::before { margin: auto; }
+            .studio-app .brand-title,
+            .studio-app .brand-subtitle,
+            .studio-app .nav-section-label,
+            .studio-app .local-only-note,
+            .studio-app .sidebar-footer .user-role { display: none; }
+            .studio-app .nav-item { justify-content: center; padding: 8px; font-size: 0; }
+            .studio-app .nav-icon { font-size: 11px; }
+            .studio-app .sidebar-footer { padding: 10px 0 0; }
+            .studio-app .logout-button { width: 40px; min-width: 40px; padding: 0; overflow: hidden; font-size: 0; }
+            .studio-app .logout-button::before { content: "↪"; font-size: 16px; }
+        }
+
+        @media (max-width: 1180px) and (min-width: 861px) {
+            .workspace {
+                --left-panel-width: 232px;
+                --right-panel-width: 330px;
+                grid-template-columns: var(--left-panel-width) 4px minmax(400px, 1fr) 4px var(--right-panel-width);
+            }
+            .studio-progress-bar .stepper-hint { display: none; }
+        }
+
+        @media (max-width: 980px) {
+            .studio-app { overflow: auto; }
+            .studio-app .shell-main { height: auto; min-height: 100vh; overflow: visible; }
+            .studio-app .app-sidebar { display: none; }
+            .studio-app .app-shell { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 860px) {
+            .studio-topbar { min-height: 64px; padding: 8px 12px; }
+            .studio-top-actions .button-link,
+            .studio-top-actions button:not(.mobile-essential) { display: none; }
+            .studio-progress-bar { display: none; }
+            .mobile-tabs { top: 0; }
+            .workspace {
+                display: block;
+                height: auto;
+                background: var(--color-canvas);
+            }
+            .workspace > [data-col] { display: none; }
+            .workspace[data-mobile-tab="document"] [data-col="document"],
+            .workspace[data-mobile-tab="findings"] [data-col="findings"],
+            .workspace[data-mobile-tab="details"] [data-col="details"] { display: grid; }
+            .panel-resizer { display: none; }
+            .workspace-panel { height: calc(100vh - 120px); }
+            .workspace-center { display: block; }
+            .preview-shell { height: 100%; }
+            .workspace.left-collapsed .workspace-left .left-panel-content,
+            .workspace.right-collapsed .review-assistant .assistant-content { display: block; }
+            .collapsed-panel-label,
+            .panel-icon-button { display: none !important; }
+            .bulk-table-wrap { max-height: calc(100vh - 260px); }
+        }
+    </style>
+</head>
+<body class="studio-app">
+    <div class="app-shell">
+        <nav class="app-sidebar" aria-label="Workstation navigation">
+            <div class="brand-block">
+                <div class="brand-title">Redact AI</div>
+                <div class="brand-subtitle">Privacy review workstation</div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-section-label">Workspace</div>
+                <a class="nav-item" href="/" title="Dashboard"><span class="nav-icon">D</span>Dashboard</a>
+                <a class="nav-item" href="/matters" title="Matters"><span class="nav-icon">M</span>Matters</a>
+                <a class="nav-item" href="/?review_status=pending_review" title="Review Queue"><span class="nav-icon">R</span>Review Queue</a>
+                <a class="nav-item" href="/?ocr_status=queued" title="OCR Queue"><span class="nav-icon">O</span>OCR Queue</a>
+                <a class="nav-item active" href="/studio/{{ doc_id }}" title="Redaction Studio"><span class="nav-icon">S</span>Redaction Studio</a>
+            </div>
+            {% if can_admin %}
+            <div class="nav-section">
+                <div class="nav-section-label">Admin</div>
+                <a class="nav-item" href="/audit-log" title="Audit Log"><span class="nav-icon">A</span>Audit Log</a>
+                <a class="nav-item" href="/settings" title="Settings"><span class="nav-icon">S</span>Settings</a>
+            </div>
+            {% endif %}
+            <div class="local-only-note" title="All processing, storage, and exports happen on this machine. No document content is sent to any external service.">Local only · data stays on this device</div>
+            <div class="sidebar-footer">
+                <div class="user-role">{{ current_user.username }} · {{ current_user.role }}</div>
+                <button class="logout-button" type="button" onclick="logout()" title="Log out">Log out</button>
+            </div>
+        </nav>
+
+        <div class="shell-main">
+            <div class="shell-banner">
+                <strong>Reviewed redaction workspace</strong>
+                <div class="trust-strip">
+                    <span class="trust-pill">Risk-reduced</span>
+                    <span class="trust-pill">Privacy-reviewed</span>
+                    <span class="trust-pill">DOCX QA</span>
+                    <span class="trust-pill">Not automatically anonymous</span>
+                </div>
+            </div>
+
+            <header class="studio-topbar">
+                <div class="studio-title-block">
+                    <nav class="studio-breadcrumbs" aria-label="Breadcrumb">
+                        <a href="/matters">Matters</a><span aria-hidden="true">/</span>
+                        <a id="matterBreadcrumb" href="/matters">Unassigned</a>
+                    </nav>
+                    <div class="studio-document-title">
+                        <h1>Document review</h1>
+                        <span aria-hidden="true">·</span>
+                        <div id="docTitle" title="{{ filename }}">{{ filename }}</div>
+                    </div>
+                </div>
+                <div class="studio-top-actions">
+                    <span id="topRiskBadge" class="badge">Loading</span>
+                    <button class="mobile-essential" type="button" onclick="reloadDocument()">Refresh</button>
+                    <a class="button-link" href="/">Exit workspace</a>
+                </div>
+            </header>
+
+            <div class="studio-progress-bar">
+                <div id="workflowStepper" class="stepper" aria-label="Review workflow progress"></div>
+                <div id="workflowHint" class="stepper-hint" role="status"></div>
+            </div>
+
+            <div class="mobile-tabs" role="tablist" aria-label="Studio sections">
+                <button type="button" class="mobile-tab active" data-tab="document" onclick="setMobileTab('document')">Document</button>
+                <button type="button" class="mobile-tab" data-tab="findings" onclick="setMobileTab('findings')">Findings <span id="mobileTabPending" class="mobile-tab-count"></span></button>
+                <button type="button" class="mobile-tab" data-tab="details" onclick="setMobileTab('details')">Matter</button>
+            </div>
+
+            <main class="workspace" data-mobile-tab="document">
+        <aside class="workspace-panel workspace-left" data-col="details" aria-label="Matter and document navigation">
+            <div class="workspace-panel-head">
+                <div class="panel-heading-copy">
+                    <h2 id="matterName">Matter</h2>
+                    <div id="matterMeta" class="subtle">Loading context…</div>
+                </div>
+                <button id="leftPanelToggle" class="panel-icon-button" type="button" aria-label="Collapse matter panel" aria-expanded="true" onclick="toggleWorkspacePanel('left')">←</button>
+                <span class="collapsed-panel-label">Matter</span>
+            </div>
+            <div class="left-panel-content">
+                <section class="left-panel-section">
+                    <a id="matterLink" class="matter-link" href="/matters">Open matter overview</a>
+                    <label class="subtle" for="matterDocumentSearch" style="display:block; margin-top:10px;">Search matter documents</label>
+                    <input id="matterDocumentSearch" type="search" placeholder="Document name" oninput="filterMatterDocuments(this.value)">
+                    <div id="matterDocumentList" class="matter-documents" aria-live="polite">
+                        <div class="skeleton-line w85"></div><div class="skeleton-line w60"></div>
+                    </div>
+                </section>
+                <section class="left-panel-section">
+                    <h3>In this document</h3>
+                    <nav class="section-nav" aria-label="Document sections">
+                        <button type="button" onclick="navigateStudioSection('document')">Document canvas</button>
+                        <button type="button" onclick="navigateStudioSection('findings')">Findings and decisions</button>
+                        <button type="button" onclick="navigateStudioSection('ocr')">OCR and extraction</button>
+                        <button type="button" onclick="navigateStudioSection('export')">Export readiness</button>
+                    </nav>
+                </section>
+                <section class="left-panel-section">
+                    <div class="toolbar"><h3>Review status</h3><span id="riskBadge" class="badge">Loading</span></div>
+                    <div id="summaryFields" class="compact-status"></div>
+                </section>
+                {% if can_review %}
+                <section class="left-panel-section" id="ocrPanel">
+                    <h3>OCR and extraction</h3>
+                    <div class="button-grid">
+                        <button type="button" onclick="reextractDocument()">Re-run extraction</button>
+                        <button type="button" onclick="ocrAction('queue')">Queue OCR</button>
+                        <button type="button" onclick="ocrAction('run')">Run OCR</button>
+                    </div>
+                    <div class="subtle" style="margin-top:8px;">OCR remains separate until a reviewer accepts it.</div>
+                </section>
+                {% endif %}
+            </div>
+        </aside>
+
+        <button class="panel-resizer" type="button" data-resize="left" aria-label="Resize matter panel"></button>
+
+        <section class="workspace-panel workspace-center panel preview-shell" data-col="document" aria-label="Document canvas">
+            <div class="preview-head">
+                <div class="toolbar">
+                    <div>
+                        <h2 id="previewTitle">Document Review</h2>
+                        <div id="previewMeta" class="subtle"></div>
+                    </div>
+                    <div class="doc-view-controls" id="docViewControls" hidden>
+                        <button type="button" id="docStyleToggle" onclick="toggleDocRedactionStyle()">Style: placeholder</button>
+                        <button type="button" id="docViewToggle" onclick="toggleDocViewMode()">Redacted preview</button>
+                    </div>
+                    <span id="pipelinePill" class="pipeline-pill">Loading…</span>
+                </div>
+            </div>
+            <div id="ocrReviewBlock" class="ocr-review" hidden></div>
+            <div id="docView" class="doc-view" style="display: none;">
+                <div id="docPaper" class="doc-paper"><div class="skeleton-line w40"></div><div class="skeleton-line w85"></div><div class="skeleton-line w75"></div><div class="skeleton-line w85"></div><div class="skeleton-line w60"></div></div>
+            </div>
+            <pre id="previewText" class="preview">Loading...</pre>
+            <div id="pdfReview" class="pdf-review">
+                <div class="pdf-warning">
+                    PDF black boxes shown here are review overlays. Only the downloaded reviewed redacted PDF applies backend true redaction and QA checks.
+                </div>
+                <div class="pdf-nav">
+                    <button type="button" onclick="pdfPrevPage()">&#8592; Prev</button>
+                    <input id="pdfPageInput" class="pdf-page-input" value="1" onchange="pdfGoToPage(this.value)" aria-label="Page number">
+                    <span id="pdfPageTotal" class="subtle">/ ?</span>
+                    <button type="button" onclick="pdfNextPage()">Next &#8594;</button>
+                    <button type="button" onclick="pdfZoom(-0.2)">&#8722;</button>
+                    <span id="pdfZoomLabel" class="subtle">120%</span>
+                    <button type="button" onclick="pdfZoom(0.2)">+</button>
+                    <button type="button" onclick="pdfFitWidth()">Fit width</button>
+                    <button type="button" id="pdfShowAllBtn" onclick="pdfToggleShowAll()">Show all pages</button>
+                    <span id="pdfPageCounters" class="subtle"></span>
+                </div>
+                {% if can_review %}
+                <div id="pdfSuggestCallout" class="pdf-suggest" hidden></div>
+                <details class="pdf-advanced" id="pdfDrawTools">
+                    <summary>Add a missed box (draw on page)</summary>
+                    <div class="pdf-toolbar" style="margin-top: 8px;">
+                        <label class="pdf-draw-label">Draw category
+                            <select id="pdfDrawCategory">
+                                <option value="manual_sensitive_text">manual_sensitive_text</option>
+                                <option value="natural_person_name">natural_person_name</option>
+                                <option value="turkish_national_id">turkish_national_id</option>
+                                <option value="tax_number">tax_number</option>
+                                <option value="case_or_investigation_number">case_or_investigation_number</option>
+                                <option value="court_or_authority">court_or_authority</option>
+                                <option value="address">address</option>
+                                <option value="party_role">party_role</option>
+                                <option value="criminal_allegation">criminal_allegation</option>
+                            </select>
+                        </label>
+                        <span class="subtle">Click and drag on the page to draw a new box.</span>
+                        <button type="button" onclick="generatePdfRegions()">Regenerate suggested boxes</button>
+                    </div>
+                </details>
+                <details class="pdf-advanced">
+                    <summary>Bulk actions</summary>
+                    <div class="pdf-toolbar" style="margin-top: 8px;">
+                        <button class="approve" type="button" onclick="pdfBatchReview({ action: 'approve', page_number: pdfCurrentPage, only_pending: true })">Approve page boxes</button>
+                        <button class="danger" type="button" onclick="pdfBatchReview({ action: 'reject', page_number: pdfCurrentPage, only_pending: true })">Reject page pending</button>
+                        <button class="approve" type="button" onclick="pdfBatchReview({ action: 'approve', source: 'detected_text', only_pending: true })">Approve all detected</button>
+                        <button class="danger" type="button" id="pdfRejectQaBtn" onclick="pdfRejectQaWarningBoxes()" disabled title="Run PDF QA first">Reject QA-warning boxes</button>
+                    </div>
+                </details>
+                <div id="pdfSelectionPanel" class="pdf-selection" hidden>
+                    <div class="finding-meta">
+                        <strong>Selected box</strong>
+                        <span id="pdfSelectionMeta" class="subtle"></span>
+                    </div>
+                    <div class="pdf-selection-grid">
+                        <select id="pdfSelectionCategory">
+                            <option value="manual_sensitive_text">manual_sensitive_text</option>
+                            <option value="natural_person_name">natural_person_name</option>
+                            <option value="turkish_national_id">turkish_national_id</option>
+                            <option value="tax_number">tax_number</option>
+                            <option value="case_or_investigation_number">case_or_investigation_number</option>
+                            <option value="court_or_authority">court_or_authority</option>
+                            <option value="address">address</option>
+                            <option value="party_role">party_role</option>
+                            <option value="criminal_allegation">criminal_allegation</option>
+                        </select>
+                        <input id="pdfSelectionNote" placeholder="Reviewer note">
+                        <button type="button" onclick="savePdfSelection()">Save</button>
+                        <button class="approve" type="button" onclick="selectedPdfRegionAction('approve')">Approve (A)</button>
+                        <button class="danger" type="button" onclick="selectedPdfRegionAction('reject')">Reject (Del)</button>
+                    </div>
+                    <div class="subtle">Drag the box to move it, drag a corner to resize, Escape to deselect. Edits reset the box to pending review.</div>
+                </div>
+                <details class="pdf-advanced">
+                    <summary>Advanced: add box by numeric coordinates</summary>
+                    <form class="manual-region-grid" onsubmit="addPdfRegion(event)">
+                        <input id="pdfRegionPage" placeholder="Page" value="1">
+                        <input id="pdfRegionX0" placeholder="x0 0-1">
+                        <input id="pdfRegionY0" placeholder="y0 0-1">
+                        <input id="pdfRegionX1" placeholder="x1 0-1">
+                        <input id="pdfRegionY1" placeholder="y1 0-1">
+                        <input id="pdfRegionCategory" placeholder="manual_sensitive_text" style="grid-column: span 3;">
+                        <button class="primary" type="submit" style="grid-column: span 2;">Add Manual Box</button>
+                    </form>
+                </details>
+                {% endif %}
+                <div id="pdfPages"></div>
+            </div>
+        </section>
+
+        <button class="panel-resizer" type="button" data-resize="right" aria-label="Resize review assistant"></button>
+
+        <aside class="workspace-panel review-assistant" data-col="findings" aria-label="Contextual review assistant">
+            <div class="workspace-panel-head">
+                <div class="panel-heading-copy">
+                    <h2 id="findingsTitle">Review assistant</h2>
+                    <div id="findingSummary" class="subtle"></div>
+                </div>
+                <button id="rightPanelToggle" class="panel-icon-button" type="button" aria-label="Collapse review assistant" aria-expanded="true" onclick="toggleWorkspacePanel('right')">→</button>
+                <span class="collapsed-panel-label">Review</span>
+            </div>
+            <div class="assistant-content">
+                <div class="assistant-summary">
+                    <div class="assistant-risk-row">
+                        <span id="pendingBadge" class="badge">0 pending</span>
+                        <span id="assistantRiskSummary" class="subtle">Loading risk summary…</span>
+                    </div>
+                    <div id="assistantNextAction" class="assistant-next-action" role="status">Loading recommended next action…</div>
+                    <div class="assistant-mode-switch" role="group" aria-label="Review mode">
+                        <button id="guidedModeButton" class="active" type="button" aria-pressed="true" onclick="setReviewMode('guided')">Guided review</button>
+                        <button id="groupModeButton" type="button" aria-pressed="false" onclick="setReviewMode('groups')">By type</button>
+                        <button id="bulkModeButton" type="button" aria-pressed="false" onclick="setReviewMode('bulk')">Bulk table</button>
+                    </div>
+                </div>
+
+                <div id="groupReviewPane" class="assistant-pane" hidden>
+                    <p class="group-intro subtle">
+                        Findings of the same kind usually get the same decision. Review a whole
+                        type at once, or open one to handle its findings individually.
+                    </p>
+                    <div id="reviewGroups" class="review-groups"></div>
+                </div>
+
+                <div id="guidedReviewPane" class="assistant-pane">
+                    <div id="assistantCurrentFinding" class="assistant-card" tabindex="-1"></div>
+                    <details class="assistant-queue-disclosure">
+                        <summary>All findings and PDF boxes</summary>
+                        <div id="findingGroups" class="finding-list"></div>
+                    </details>
+                    {% if can_review %}
+                    <form class="manual-form" onsubmit="addFinding(event)">
+                        <h2>Add missed text</h2>
+                        <input id="manualText" placeholder="Exact text">
+                        <input id="manualCategory" placeholder="manual_sensitive_text">
+                        <input id="manualReplacement" placeholder="[MANUAL_SENSITIVE_TEXT_REDACTED]">
+                        <button class="primary" type="submit">Add finding</button>
+                    </form>
+                    {% endif %}
+                </div>
+
+                <div id="bulkReviewPane" class="assistant-pane bulk-pane" hidden>
+                    {% if can_review %}
+                    <div class="bulk-toolbar">
+                        <button class="approve" type="button" onclick="batchReview('approve', ['LOW', 'MEDIUM'])">Approve pending low/medium</button>
+                        <button class="danger" type="button" onclick="batchReview('reject', [])">Reject all pending</button>
+                    </div>
+                    {% else %}
+                    <div class="role-readonly">Bulk review controls are unavailable to viewer role.</div>
+                    {% endif %}
+                    <div class="bulk-table-wrap">
+                        <table class="bulk-review-table">
+                            <thead><tr><th>Finding</th><th>Risk</th><th>Status</th><th>Replacement</th><th>Action</th></tr></thead>
+                            <tbody id="bulkReviewRows"><tr><td colspan="5">Loading findings…</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <details id="exportReadinessDetails" class="assistant-technical">
+                    <summary>Export readiness and technical details</summary>
+                    <div class="assistant-technical-content">
+                        <div id="exportGatePanel" class="export-gate"></div>
+                        <section class="panel panel-pad">
+                            <details>
+                                <summary class="panel-summary"><h2>Gate conditions</h2> <span id="gateDecision" class="badge">Loading</span></summary>
+                                <div id="gateList" class="gate-list"></div>
+                            </details>
+                        </section>
+                        <section class="panel panel-pad">
+                            <details>
+                                <summary class="panel-summary"><h2>Artifact timeline</h2></summary>
+                                <div id="artifactTimeline" class="gate-list"></div>
+                            </details>
+                        </section>
+                        {% if can_review %}
+                        <section class="panel panel-pad" id="reviewActionsPanel">
+                            <h2>Document review actions</h2>
+                            <div class="button-grid">
+                                <button class="approve" type="button" onclick="reviewAction('mark_redacted')">Redaction complete</button>
+                                <button class="approve" type="button" onclick="reviewAction('approve')">Approve review</button>
+                                <button class="danger" type="button" onclick="reviewAction('reject')">Reject review</button>
+                                <button type="button" onclick="reviewAction('reset')">Reset review</button>
+                            </div>
+                        </section>
+                        <section class="panel panel-pad">
+                            <h2>Exports and QA</h2>
+                            <div id="exportLinks" class="button-grid"></div>
+                            <div id="qaReport" class="qa-list"></div>
+                        </section>
+                        {% else %}
+                        <section class="panel panel-pad">
+                            <h2>Read-only Access</h2>
+                            <div class="role-readonly">Viewer role can inspect status, preview, findings, OCR summaries, and gate reasons. Review, OCR, QA, and export actions require reviewer or admin role.</div>
+                        </section>
+                        {% endif %}
+                    </div>
+                </details>
+            </div>
+        </aside>
+            </main>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="{{ url_for('static', filename='vendor/pdfjs/pdf.min.js') }}"></script>
+    <script>
+        const docId = Number({{ doc_id }});
+        const findingExplanations = {{ finding_explanations | tojson }};
+        const canReview = {{ 'true' if can_review else 'false' }};
+        const canAdmin = {{ 'true' if can_admin else 'false' }};
+        let currentDoc = null;
+        let pdfRegions = [];
+        let pdfDoc = null;
+        let pdfCurrentPage = 1;
+        let pdfZoomScale = 1.2;
+        let pdfShowAll = false;
+        let pdfSelectedRegionId = null;
+        let pdfLastQaLeakedIds = [];
+        let pdfRenderToken = 0;
+        let pdfRenderedSignature = null;
+        let pdfDrag = null;
+        let pdfInitialFitDone = false;
+        let docText = '';
+        let docTextWarning = null;
+        let docTextLoadedFor = null;
+        let selectedFindingId = null;
+        let docViewMode = 'document';
+        let docRedactionStyle = 'placeholder';
+        let reviewMode = 'guided';
+        let matterDocuments = [];
+        let matterContextLoadedFor = null;
+
+        const groupLabels = {
+            natural_person_name: 'People',
+            phone_number: 'People',
+            email_address: 'People',
+            turkish_national_id: 'IDs / Registry',
+            tax_number: 'IDs / Registry',
+            mersis_number: 'IDs / Registry',
+            bar_registration_number: 'IDs / Registry',
+            iban: 'IDs / Registry',
+            company_name: 'Companies',
+            court_or_authority: 'Courts / UYAP',
+            case_or_investigation_number: 'Courts / UYAP',
+            party_role: 'Party Roles',
+            address: 'Addresses',
+            date: 'Dates / Context',
+            money_amount: 'Financial',
+            criminal_allegation: 'Sensitive / Criminal',
+            health_data: 'Sensitive / Criminal',
+            privileged_or_confidential: 'Confidential'
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initializePanelResizers();
+            reloadDocument();
+        });
+
+        async function reloadDocument() {
+            const workspace = document.querySelector('.workspace');
+            if (workspace) workspace.setAttribute('aria-busy', 'true');
+            try {
+                const response = await fetch(`/api/document/${docId}`);
+                if (!response.ok) throw new Error('Document could not be loaded.');
+                currentDoc = await response.json();
+                renderDocument();
+            } catch (error) {
+                renderWorkspaceFailure(error.message || 'Document could not be loaded.');
+                showToast(error.message || 'Document could not be loaded.');
+            } finally {
+                if (workspace) workspace.setAttribute('aria-busy', 'false');
+            }
+        }
+
+        function renderWorkspaceFailure(message) {
+            const safeMessage = escapeHtml(message);
+            const paper = document.getElementById('docPaper');
+            const assistant = document.getElementById('assistantCurrentFinding');
+            const list = document.getElementById('matterDocumentList');
+            if (paper) paper.innerHTML = `<div class="studio-failure">${safeMessage}<br><button type="button" onclick="reloadDocument()">Try again</button></div>`;
+            if (assistant) assistant.innerHTML = `<div class="studio-failure">Review context is unavailable until the document reloads.</div>`;
+            if (list) list.innerHTML = '<div class="studio-failure">Matter documents could not be loaded.</div>';
+        }
+
+        function renderDocument() {
+            const doc = currentDoc;
+            const profile = doc.privacy_profile || {};
+            const findings = doc.findings || [];
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending');
+            const critical = findings.filter((finding) => finding.risk === 'CRITICAL');
+            const gate = profile.external_llm_gate || {};
+            const failed = gate.failed_conditions || [];
+
+            document.title = `${doc.filename} - Redact AI`;
+            document.getElementById('docTitle').textContent = doc.filename;
+            document.getElementById('docTitle').title = doc.filename;
+            document.getElementById('riskBadge').className = `badge risk-${escapeHtml(doc.residual_risk || 'Unknown')}`;
+            document.getElementById('riskBadge').textContent = doc.residual_risk || 'Unknown';
+            document.getElementById('topRiskBadge').className = `badge risk-${escapeHtml(doc.residual_risk || 'Unknown')}`;
+            document.getElementById('topRiskBadge').textContent = `${doc.residual_risk || 'Unknown'} risk`;
+            const pipelinePill = document.getElementById('pipelinePill');
+            pipelinePill.className = `pipeline-pill stage-${doc.pipeline_stage || 'needs_review'}`;
+            pipelinePill.textContent = doc.pipeline_message || doc.review_status || 'pending_review';
+            pipelinePill.title = `Raw state: ${doc.review_status || '-'} · extraction ${doc.extraction_status || '-'} · OCR ${doc.ocr_status || '-'}`;
+            document.getElementById('pendingBadge').textContent = `${pending.length} pending`;
+            document.getElementById('mobileTabPending').textContent = pending.length ? String(pending.length) : '';
+            document.getElementById('findingSummary').textContent = `${findings.length} findings · ${critical.length} critical`;
+            document.getElementById('previewMeta').textContent = doc.recommended_strategy || '';
+            document.getElementById('previewText').textContent = profile.redacted_preview || 'No preview available.';
+            const isPdf = doc.file_extension === '.pdf';
+            document.getElementById('pdfReview').style.display = isPdf ? 'grid' : 'none';
+            document.getElementById('docViewControls').hidden = isPdf;
+            if (selectedFindingId && !findings.some((finding) => finding.id === selectedFindingId)) {
+                selectedFindingId = null;
+            }
+            if (!selectedFindingId && findings.length) {
+                selectedFindingId = (pending[0] || findings[0]).id;
+            }
+            applyDocViewMode();
+
+            document.getElementById('summaryFields').innerHTML = [
+                field('Filename', doc.filename),
+                field('Category', `${doc.category_name || '-'} / ${doc.subcategory_name || '-'}`),
+                field('Client', doc.client_name || '-'),
+                field('Matter', doc.matter?.name || 'Unassigned'),
+                field('Extraction', doc.extraction_status || 'Unknown'),
+                field('OCR', doc.ocr_status || 'not_required'),
+                field('Findings', `${findings.length} total, ${pending.length} pending`),
+                field('Artifacts', `${(doc.artifacts || []).length} timeline entries`),
+                field('Reviewed DOCX', Number(doc.redaction_completed || 0) ? 'Redaction completed' : 'Not completed')
+            ].join('');
+
+            const allowed = Boolean(gate.allowed);
+            document.getElementById('gateDecision').className = `badge ${allowed ? 'ready' : 'blocked'}`;
+            document.getElementById('gateDecision').textContent = gate.decision || doc.external_llm_readiness || 'Unknown';
+            document.getElementById('gateList').innerHTML = failed.length
+                ? failed.map((item) => `<div class="gate-item">${escapeHtml(item)}</div>`).join('')
+                : '<div class="gate-item">No failed gate conditions.</div>';
+
+            renderExports(doc);
+            renderArtifacts(doc.artifacts || []);
+            renderOcrReview(doc);
+            renderStepper(doc);
+            updateContextPanels(doc);
+            renderExportGate(doc);
+            renderAssistant(doc);
+            renderBulkReviewTable(findings);
+            loadMatterContext(doc);
+            document.getElementById('findingsTitle').textContent = isPdf ? 'Review Queue' : 'Findings';
+            if (isPdf) {
+                const boxes = doc.pdf_region_summary || {};
+                document.getElementById('findingSummary').textContent =
+                    `${findings.length} findings · ${critical.length} critical · ${Number(boxes.total || 0)} boxes (${Number(boxes.pending || 0)} pending)`;
+                const callout = document.getElementById('pdfSuggestCallout');
+                if (callout) {
+                    const ocrReady = ['not_required', 'accepted'].includes(doc.ocr_status || 'not_required');
+                    if (canReview && ocrReady && Number(boxes.total || 0) === 0 && findings.length) {
+                        callout.innerHTML = `
+                            <div><strong>${findings.length} detected finding${findings.length !== 1 ? 's have' : ' has'} no redaction boxes yet.</strong>
+                            <div class="subtle">Generate suggested boxes from the detected findings, then click each box to approve or reject it. You can draw extra boxes for anything the detector missed.</div></div>
+                            <div><button class="approve" type="button" onclick="generatePdfRegions()">Generate suggested boxes</button></div>
+                        `;
+                        callout.hidden = false;
+                    } else {
+                        callout.hidden = true;
+                        callout.innerHTML = '';
+                    }
+                }
+                renderReviewQueue();
+                renderPdfPreview();
+                loadPdfRegions();
+            } else {
+                renderFindingGroups(findings);
+                renderDocView();
+            }
+        }
+
+        async function loadMatterContext(doc) {
+            const matter = doc.matter || null;
+            const matterId = matter && Number(matter.id);
+            const matterName = matter?.name || 'Unassigned';
+            document.getElementById('matterName').textContent = matterName;
+            document.getElementById('matterBreadcrumb').textContent = matterName;
+            document.getElementById('matterMeta').textContent = doc.client_name || 'Local matter workspace';
+            const matterLink = document.getElementById('matterLink');
+            const breadcrumb = document.getElementById('matterBreadcrumb');
+            if (!matterId) {
+                matterLink.href = '/matters';
+                breadcrumb.href = '/matters';
+                matterDocuments = [{ id: doc.id, filename: doc.filename, review_status: doc.review_status }];
+                renderMatterDocuments(matterDocuments);
+                return;
+            }
+            matterLink.href = `/matter/${matterId}`;
+            breadcrumb.href = `/matter/${matterId}`;
+            if (matterContextLoadedFor === matterId) {
+                renderMatterDocuments(matterDocuments);
+                return;
+            }
+            const list = document.getElementById('matterDocumentList');
+            list.innerHTML = '<div class="skeleton-line w85"></div><div class="skeleton-line w60"></div>';
+            try {
+                const response = await fetch(`/api/matter/${matterId}`);
+                if (!response.ok) throw new Error('Matter documents could not be loaded.');
+                const payload = await response.json();
+                matterDocuments = payload.documents || [];
+                matterContextLoadedFor = matterId;
+                document.getElementById('matterMeta').textContent = [payload.client_name, `${matterDocuments.length} document${matterDocuments.length === 1 ? '' : 's'}`].filter(Boolean).join(' · ') || 'Local matter workspace';
+                renderMatterDocuments(matterDocuments);
+            } catch (error) {
+                list.innerHTML = `<div class="studio-failure">${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        function renderMatterDocuments(documents) {
+            const list = document.getElementById('matterDocumentList');
+            if (!documents.length) {
+                list.innerHTML = '<div class="studio-empty">No documents in this matter.</div>';
+                return;
+            }
+            list.innerHTML = documents.map((item) => `
+                <a class="matter-document-link ${Number(item.id) === docId ? 'active' : ''}" href="/studio/${Number(item.id)}" data-document-search="${escapeHtml(`${item.title || ''} ${item.filename || ''}`.toLowerCase())}">
+                    <span>${escapeHtml(item.title || item.filename || `Document ${item.id}`)}</span>
+                    <span class="badge">${escapeHtml(documentStageLabel(item))}</span>
+                </a>
+            `).join('');
+        }
+
+        function documentStageLabel(item) {
+            if (item.ocr_status && !['not_required', 'accepted'].includes(item.ocr_status)) return 'OCR';
+            if (item.review_status === 'approved_for_external_llm') return 'Ready';
+            if (item.review_status === 'redaction_complete') return 'Approve';
+            return 'Review';
+        }
+
+        function filterMatterDocuments(value) {
+            const query = String(value || '').trim().toLowerCase();
+            document.querySelectorAll('.matter-document-link').forEach((link) => {
+                link.hidden = Boolean(query) && !String(link.dataset.documentSearch || '').includes(query);
+            });
+        }
+
+        function selectedFinding() {
+            return ((currentDoc && currentDoc.findings) || []).find((finding) => finding.id === selectedFindingId) || null;
+        }
+
+        function renderAssistant(doc) {
+            const findings = doc.findings || [];
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending');
+            const criticalPending = pending.filter((finding) => finding.risk === 'CRITICAL').length;
+            document.getElementById('assistantRiskSummary').textContent = `${findings.length} findings · ${criticalPending} critical pending · ${doc.residual_risk || 'Unknown'} residual risk`;
+            document.getElementById('assistantNextAction').textContent = doc.pipeline_message || 'Review the current finding and confirm the next permitted action.';
+            const target = document.getElementById('assistantCurrentFinding');
+            if ((doc.ocr_status || 'not_required') === 'completed') {
+                target.innerHTML = `
+                    <div class="assistant-card-title">OCR output needs review</div>
+                    <div class="assistant-explanation">Read the OCR text in the document canvas. It cannot affect findings, redaction, or release readiness until a reviewer accepts it.</div>
+                    ${canReview ? '<div class="assistant-actions"><button class="approve" type="button" onclick="ocrAction(\'accept\')">Accept OCR</button><button class="danger" type="button" onclick="ocrAction(\'reject\')">Reject OCR</button></div>' : '<div class="role-readonly">Viewer role is read-only.</div>'}
+                `;
+                return;
+            }
+            const finding = selectedFinding();
+            if (!finding) {
+                target.innerHTML = `
+                    <div class="assistant-card-title">No finding selected</div>
+                    <div class="assistant-explanation">${findings.length ? 'Choose a finding from the document or queue to review it in context.' : 'No automated findings were detected. This is not a guarantee of de-identification; complete manual review before export.'}</div>
+                `;
+                return;
+            }
+            const explanations = findingExplanations || {};
+            const info = (explanations.categories || {})[finding.category] || {
+                label: (finding.category || 'Finding').replace(/_/g, ' '),
+                basis: 'Detected by the privacy scanner.',
+                concern: 'Review whether this value could identify a person or matter.'
+            };
+            const order = docFindingOrder();
+            const index = order.findIndex((item) => item.id === finding.id);
+            const evidence = finding.evidence || {};
+            target.innerHTML = `
+                <div class="assistant-nav">
+                    <button type="button" onclick="selectAdjacentFinding(-1)" ${index <= 0 ? 'disabled' : ''}>← Previous</button>
+                    <span class="subtle">${index + 1} of ${order.length}</span>
+                    <button type="button" onclick="selectAdjacentFinding(1)" ${index < 0 || index >= order.length - 1 ? 'disabled' : ''}>Next →</button>
+                </div>
+                <div class="finding-meta">
+                    <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
+                    <span class="badge">${escapeHtml(finding.review_status || 'pending')}</span>
+                    <span class="badge">${escapeHtml(finding.source || 'detector')}</span>
+                </div>
+                <div class="assistant-card-title">${escapeHtml(info.label)}</div>
+                <div class="finding-sample">${escapeHtml(finding.sample || 'No sample available')}</div>
+                <div class="assistant-explanation"><strong>Why it was flagged:</strong> ${escapeHtml(info.basis)}<br><strong>Why it matters:</strong> ${escapeHtml(info.concern)}</div>
+                <div class="assistant-fields">
+                    <div class="assistant-field"><label for="assistantReplacement">Replacement on approved export</label><input id="assistantReplacement" value="${escapeHtml(finding.replacement_text || finding.placeholder || '[REDACTED]')}" ${canReview ? '' : 'disabled'}></div>
+                    <div class="assistant-field"><label for="assistantReviewerNote">Reviewer note</label><textarea id="assistantReviewerNote" ${canReview ? '' : 'disabled'}>${escapeHtml(finding.reviewer_note || '')}</textarea></div>
+                </div>
+                ${canReview ? `
+                    <div class="assistant-actions">
+                        <button class="approve" type="button" onclick="reviewAssistantAction('approve')">Approve finding</button>
+                        <button class="danger" type="button" onclick="reviewAssistantAction('reject')">Reject finding</button>
+                        <button type="button" style="grid-column:1 / -1" onclick="updateCurrentFinding()">Save edit</button>
+                    </div>` : '<div class="role-readonly">Viewer role can inspect this finding but cannot change it.</div>'}
+                <details class="finding-why">
+                    <summary>Technical details</summary>
+                    <dl class="why-grid">
+                        <dt>Finding ID</dt><dd>${Number(finding.id)}</dd>
+                        <dt>Category</dt><dd><code>${escapeHtml(finding.category || '-')}</code></dd>
+                        <dt>Evidence</dt><dd>${escapeHtml(evidence.context || evidence.source_part || 'No location metadata')}</dd>
+                        <dt>Verification</dt><dd>${escapeHtml(verificationStatusLabel(evidence.verification_status))}</dd>
+                    </dl>
+                </details>
+                <div class="assistant-shortcuts">A approve · R reject · E edit · J/K previous/next</div>
+            `;
+        }
+
+        // Findings of one category almost always take the same decision -- a
+        // contract's 49 health_data hits are one judgement, not 49. Grouping
+        // turns the queue into a handful of decisions and leaves the per-finding
+        // path available for the ones that genuinely differ.
+        const CATEGORY_LABELS = {
+            natural_person_name: 'Person names',
+            turkish_national_id: 'National ID numbers (TCKN)',
+            email_address: 'Email addresses',
+            phone_number: 'Phone numbers',
+            address: 'Addresses',
+            iban: 'Bank accounts (IBAN)',
+            tax_number: 'Tax numbers (VKN)',
+            mersis_number: 'MERSIS numbers',
+            bar_registration_number: 'Bar registration numbers',
+            case_or_investigation_number: 'Case / investigation numbers',
+            court_or_authority: 'Courts and authorities',
+            company_name: 'Company names',
+            party_role: 'Party roles',
+            health_data: 'Health information',
+            criminal_allegation: 'Criminal allegations',
+            privileged_or_confidential: 'Privileged / confidential content',
+            money_amount: 'Money amounts',
+            date: 'Dates',
+        };
+
+        const RISK_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+
+        function categoryLabel(category) {
+            return CATEGORY_LABELS[category] || String(category || 'Other').replace(/_/g, ' ');
+        }
+
+        function buildReviewGroups(findings) {
+            const groups = new Map();
+            findings.forEach((finding) => {
+                const key = finding.category || 'other';
+                if (!groups.has(key)) {
+                    groups.set(key, { category: key, items: [], pending: 0, approved: 0, rejected: 0, risk: 'LOW' });
+                }
+                const group = groups.get(key);
+                group.items.push(finding);
+                const status = finding.review_status || 'pending';
+                if (status === 'pending') group.pending += 1;
+                else if (status === 'rejected') group.rejected += 1;
+                else group.approved += 1;
+                // A group is as severe as its most severe member.
+                if ((RISK_ORDER[finding.risk] ?? 9) < (RISK_ORDER[group.risk] ?? 9)) group.risk = finding.risk;
+            });
+            // Unfinished work first, then most severe, then largest.
+            return Array.from(groups.values()).sort((a, b) =>
+                (b.pending > 0) - (a.pending > 0)
+                || (RISK_ORDER[a.risk] ?? 9) - (RISK_ORDER[b.risk] ?? 9)
+                || b.items.length - a.items.length);
+        }
+
+        function renderReviewGroups() {
+            const target = document.getElementById('reviewGroups');
+            if (!target) return;
+            const findings = (currentDoc && currentDoc.findings) || [];
+            if (!findings.length) {
+                target.innerHTML = '<div class="studio-empty">No findings to review.</div>';
+                return;
+            }
+            target.innerHTML = buildReviewGroups(findings).map((group) => {
+                const done = group.pending === 0;
+                const safeCategory = escapeHtml(group.category);
+                const controls = (canReview && group.pending)
+                    ? `<div class="review-group-actions">
+                           <button class="approve" type="button" onclick="batchReviewCategory('${safeCategory}', 'approve')">Approve all ${group.pending}</button>
+                           <button class="danger" type="button" onclick="batchReviewCategory('${safeCategory}', 'reject')">Reject all ${group.pending}</button>
+                       </div>`
+                    : '';
+                const rows = group.items.map((finding) => `
+                    <li>
+                        <button type="button" class="review-group-item" onclick="selectFinding(${Number(finding.id)}, false); setReviewMode('guided')">
+                            <span class="review-group-sample">${escapeHtml(finding.sample || '-')}</span>
+                            <span class="badge status-${escapeHtml(finding.review_status || 'pending')}">${escapeHtml(finding.review_status || 'pending')}</span>
+                        </button>
+                    </li>`).join('');
+                return `
+                    <section class="review-group ${done ? 'is-done' : ''}">
+                        <header class="review-group-head">
+                            <div class="review-group-title">
+                                <span class="badge risk-${escapeHtml(group.risk)}">${escapeHtml(group.risk)}</span>
+                                <strong>${escapeHtml(categoryLabel(group.category))}</strong>
+                                <span class="subtle">${group.items.length} finding${group.items.length === 1 ? '' : 's'}</span>
+                            </div>
+                            <div class="review-group-status subtle">
+                                ${done ? 'All reviewed' : `${group.pending} pending`}${group.rejected ? ` · ${group.rejected} rejected` : ''}
+                            </div>
+                        </header>
+                        ${controls}
+                        <details class="review-group-detail">
+                            <summary>Show findings</summary>
+                            <ul class="review-group-list">${rows}</ul>
+                        </details>
+                    </section>`;
+            }).join('');
+        }
+
+        async function batchReviewCategory(category, action) {
+            if (!canReview) return;
+            const label = categoryLabel(category).toLowerCase();
+            if (action === 'reject' && !window.confirm(`Reject all pending ${label}? Rejected findings are NOT redacted on export.`)) return;
+            const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, categories: [category], only_pending: true })
+            });
+            await handleMutation(response, `${categoryLabel(category)} ${action === 'approve' ? 'approved' : 'rejected'}.`);
+        }
+
+        function renderBulkReviewTable(findings) {
+            const target = document.getElementById('bulkReviewRows');
+            if (!target) return;
+            if (!findings.length) {
+                target.innerHTML = '<tr><td colspan="5"><div class="studio-empty">No findings to review.</div></td></tr>';
+                return;
+            }
+            target.innerHTML = docFindingOrder().map((finding) => `
+                <tr class="${finding.id === selectedFindingId ? 'selected' : ''}">
+                    <td><button type="button" onclick="selectFinding(${finding.id}, false); setReviewMode('guided')">${escapeHtml(finding.sample || finding.category || '-')}</button><div class="subtle">#${Number(finding.id)} · ${escapeHtml(finding.category || '-')}</div></td>
+                    <td><span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span></td>
+                    <td>${escapeHtml(finding.review_status || 'pending')}</td>
+                    <td>${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</td>
+                    <td>${canReview ? `<button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('approve')">Approve</button> <button class="danger" type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('reject')">Reject</button>` : 'Read only'}</td>
+                </tr>
+            `).join('');
+            // Both views read the same findings; refresh together so switching
+            // modes never shows a stale count.
+            renderReviewGroups();
+        }
+
+        function setReviewMode(mode) {
+            reviewMode = ['bulk', 'groups'].includes(mode) ? mode : 'guided';
+            const panes = { guided: 'guidedReviewPane', groups: 'groupReviewPane', bulk: 'bulkReviewPane' };
+            const buttons = { guided: 'guidedModeButton', groups: 'groupModeButton', bulk: 'bulkModeButton' };
+            Object.entries(panes).forEach(([name, id]) => {
+                const pane = document.getElementById(id);
+                if (pane) pane.hidden = reviewMode !== name;
+            });
+            Object.entries(buttons).forEach(([name, id]) => {
+                const button = document.getElementById(id);
+                if (!button) return;
+                button.classList.toggle('active', reviewMode === name);
+                button.setAttribute('aria-pressed', String(reviewMode === name));
+            });
+            if (reviewMode === 'groups') renderReviewGroups();
+        }
+
+        function focusAssistantCard() {
+            const card = document.getElementById('assistantCurrentFinding');
+            if (!card) return;
+            card.focus({ preventScroll: true });
+            card.scrollIntoView({ block: 'nearest' });
+        }
+
+        function toggleWorkspacePanel(side) {
+            const workspace = document.querySelector('.workspace');
+            const isLeft = side === 'left';
+            const className = isLeft ? 'left-collapsed' : 'right-collapsed';
+            const button = document.getElementById(isLeft ? 'leftPanelToggle' : 'rightPanelToggle');
+            const collapsed = workspace.classList.toggle(className);
+            if (button) {
+                button.setAttribute('aria-expanded', String(!collapsed));
+                button.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} ${isLeft ? 'matter panel' : 'review assistant'}`);
+                button.textContent = isLeft
+                    ? (collapsed ? '→' : '←')
+                    : (collapsed ? '←' : '→');
+            }
+        }
+
+        function initializePanelResizers() {
+            const workspace = document.querySelector('.workspace');
+            if (!workspace) return;
+            const limits = {
+                left: { min: 220, max: 420, variable: '--left-panel-width' },
+                right: { min: 300, max: 520, variable: '--right-panel-width' }
+            };
+            const setSize = (side, requested) => {
+                const config = limits[side];
+                const value = Math.round(Math.min(config.max, Math.max(config.min, requested)));
+                workspace.style.setProperty(config.variable, `${value}px`);
+                const control = workspace.querySelector(`[data-resize="${side}"]`);
+                if (control) control.setAttribute('aria-valuenow', String(value));
+            };
+            workspace.querySelectorAll('.panel-resizer').forEach((control) => {
+                const side = control.dataset.resize;
+                const config = limits[side];
+                control.setAttribute('role', 'separator');
+                control.setAttribute('aria-orientation', 'vertical');
+                control.setAttribute('aria-valuemin', String(config.min));
+                control.setAttribute('aria-valuemax', String(config.max));
+                control.setAttribute('aria-valuenow', side === 'left' ? '272' : '360');
+                control.addEventListener('pointerdown', (event) => {
+                    if (event.button !== 0) return;
+                    event.preventDefault();
+                    control.setPointerCapture(event.pointerId);
+                    document.body.classList.add('is-resizing-panel');
+                    const move = (moveEvent) => {
+                        const rect = workspace.getBoundingClientRect();
+                        setSize(side, side === 'left' ? moveEvent.clientX - rect.left : rect.right - moveEvent.clientX);
+                    };
+                    const finish = () => {
+                        document.body.classList.remove('is-resizing-panel');
+                        control.removeEventListener('pointermove', move);
+                        control.removeEventListener('pointerup', finish);
+                        control.removeEventListener('pointercancel', finish);
+                    };
+                    control.addEventListener('pointermove', move);
+                    control.addEventListener('pointerup', finish);
+                    control.addEventListener('pointercancel', finish);
+                });
+                control.addEventListener('keydown', (event) => {
+                    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+                    event.preventDefault();
+                    const current = Number(control.getAttribute('aria-valuenow'));
+                    const direction = event.key === 'ArrowRight' ? 1 : -1;
+                    setSize(side, current + direction * (side === 'left' ? 16 : -16));
+                });
+            });
+        }
+
+        function navigateStudioSection(section) {
+            if (window.matchMedia('(max-width: 860px)').matches) {
+                setMobileTab(section === 'findings' || section === 'export' ? 'findings' : section === 'ocr' ? 'details' : 'document');
+            }
+            const target = {
+                document: document.getElementById('previewTitle'),
+                findings: document.getElementById('assistantCurrentFinding'),
+                ocr: document.getElementById('ocrPanel') || (!document.getElementById('ocrReviewBlock').hidden ? document.getElementById('ocrReviewBlock') : document.getElementById('summaryFields')),
+                export: document.getElementById('exportGatePanel')
+            }[section];
+            if (!target) return;
+            if (section === 'export') target.closest('details')?.setAttribute('open', '');
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+            target.focus({ preventScroll: true });
+        }
+
+        async function updateCurrentFinding() {
+            const finding = selectedFinding();
+            if (!canReview || !finding) return;
+            const response = await fetch(`/api/finding/${finding.id}/review`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'update',
+                    review_status: finding.review_status || 'pending',
+                    replacement_text: document.getElementById('assistantReplacement').value,
+                    reviewer_note: document.getElementById('assistantReviewerNote').value
+                })
+            });
+            await handleMutation(response, 'Finding details saved.');
+        }
+
+        async function reviewAssistantAction(action) {
+            const finding = selectedFinding();
+            if (!canReview || !finding) return;
+            const nextId = nextPendingFindingAfter(finding.id);
+            if (currentDoc.file_extension === '.pdf') {
+                const regionIds = pdfRegions.filter((region) => region.finding_id === finding.id).map((region) => region.id).join(',');
+                await queueAction({ stopPropagation() {} }, finding.id, regionIds, action);
+                if (nextId) {
+                    selectFinding(nextId, false);
+                    focusAssistantCard();
+                }
+                return;
+            }
+            await findingAction(finding.id, action);
+        }
+
+        function applyDocViewMode() {
+            const isPdf = currentDoc && currentDoc.file_extension === '.pdf';
+            const showDoc = !isPdf && docViewMode === 'document';
+            document.getElementById('docView').style.display = showDoc ? 'block' : 'none';
+            document.getElementById('previewText').style.display = (!isPdf && docViewMode === 'preview') ? 'block' : 'none';
+            document.getElementById('docViewToggle').textContent = docViewMode === 'document' ? 'Redacted preview' : 'Document view';
+            document.getElementById('docStyleToggle').textContent = `Style: ${docRedactionStyle === 'placeholder' ? 'placeholder' : 'black box'}`;
+            document.getElementById('previewTitle').textContent = isPdf
+                ? 'PDF Review'
+                : (docViewMode === 'document' ? 'Document Review' : 'Privacy-Reviewed Preview');
+        }
+
+        function toggleDocViewMode() {
+            docViewMode = docViewMode === 'document' ? 'preview' : 'document';
+            applyDocViewMode();
+        }
+
+        function toggleDocRedactionStyle() {
+            docRedactionStyle = docRedactionStyle === 'placeholder' ? 'blackbox' : 'placeholder';
+            applyDocViewMode();
+            renderDocView();
+        }
+
+        function docSpanStatus(finding) {
+            const status = finding.review_status || 'pending';
+            if (status === 'approved' || status === 'added_by_reviewer') return 'approved';
+            if (status === 'rejected') return 'rejected';
+            return 'pending';
+        }
+
+        function buildDocHtml(text, findings) {
+            const candidates = [];
+            findings.forEach((finding) => {
+                const sample = finding.sample || '';
+                let start = Number.isInteger(finding.start_offset) ? finding.start_offset : -1;
+                let end = Number.isInteger(finding.end_offset) ? finding.end_offset : -1;
+                const offsetsValid = start >= 0 && end > start && end <= text.length && (!sample || text.slice(start, end) === sample);
+                if (!offsetsValid) {
+                    if (!sample) return;
+                    const idx = text.indexOf(sample);
+                    if (idx === -1) return;
+                    start = idx;
+                    end = idx + sample.length;
+                }
+                candidates.push({ start, end, finding });
+            });
+            // Narrow spans win overlaps so a specific TCKN/name is clickable inside a broad
+            // party-role or address context span.
+            candidates.sort((a, b) => (a.end - a.start) - (b.end - b.start));
+            const spans = [];
+            const overlaps = (a, b) => a.start < b.end && b.start < a.end;
+            candidates.forEach((candidate) => {
+                if (!spans.some((accepted) => overlaps(accepted, candidate))) spans.push(candidate);
+            });
+            spans.sort((a, b) => a.start - b.start);
+            let html = '';
+            let cursor = 0;
+            spans.forEach(({ start, end, finding }) => {
+                html += escapeHtml(text.slice(cursor, start));
+                const status = docSpanStatus(finding);
+                let cls = `doc-span ${status}${finding.id === selectedFindingId ? ' selected' : ''}`;
+                let content = escapeHtml(text.slice(start, end));
+                if (status === 'approved') {
+                    if (docRedactionStyle === 'placeholder') {
+                        cls += ' chip';
+                        content = escapeHtml(finding.replacement_text || finding.placeholder || '[REDACTED]');
+                    } else {
+                        cls += ' blackbox';
+                    }
+                }
+                html += `<span class="${cls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, true)" title="${escapeHtml(finding.category || '')} · ${escapeHtml(finding.review_status || 'pending')}">${content}</span>`;
+                cursor = end;
+            });
+            html += escapeHtml(text.slice(cursor));
+            return html;
+        }
+
+        async function renderDocView() {
+            if (!currentDoc || currentDoc.file_extension === '.pdf') return;
+            const paper = document.getElementById('docPaper');
+            if (docTextLoadedFor !== docId) {
+                const response = await fetch(`/api/document/${docId}/text`);
+                if (!response.ok) {
+                    paper.textContent = 'Document text could not be loaded. Use the redacted preview instead.';
+                    return;
+                }
+                const data = await response.json();
+                docText = data.text || '';
+                docTextWarning = data.warning;
+                docTextLoadedFor = docId;
+            }
+            if (!docText.trim()) {
+                paper.textContent = docTextWarning || 'No extractable text yet. Run OCR, or use the redacted preview.';
+                return;
+            }
+            paper.innerHTML = buildDocHtml(docText, (currentDoc && currentDoc.findings) || []);
+        }
+
+        function selectFinding(findingId, scrollToCard) {
+            if (!currentDoc) return;
+            selectedFindingId = findingId;
+            if (currentDoc.file_extension === '.pdf') {
+                const linkedRegion = pdfRegions.find((region) => region.finding_id === findingId);
+                if (linkedRegion) selectPdfRegion(linkedRegion.id, true);
+                renderReviewQueue();
+            } else {
+                renderDocView();
+                renderFindingGroups(currentDoc.findings || []);
+            }
+            renderAssistant(currentDoc);
+            renderBulkReviewTable(currentDoc.findings || []);
+            if (scrollToCard) {
+                const card = document.querySelector(`.finding[data-finding-id="${findingId}"]`);
+                if (card) card.scrollIntoView({ block: 'nearest' });
+            } else {
+                const span = document.querySelector(`.doc-span[data-finding-id="${findingId}"]`);
+                if (span) span.scrollIntoView({ block: 'center' });
+            }
+        }
+
+        function renderExportGate(doc) {
+            const target = document.getElementById('exportGatePanel');
+            const findings = doc.findings || [];
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
+            const critPending = findings.filter((finding) => finding.risk === 'CRITICAL' && (finding.review_status || 'pending') === 'pending').length;
+            const isPdf = doc.file_extension === '.pdf';
+            const boxes = doc.pdf_region_summary || {};
+            const extractionOk = (doc.extraction_status || '') === 'Complete';
+            const ocrOk = ['not_required', 'accepted'].includes(doc.ocr_status || 'not_required');
+            const rows = [
+                {
+                    label: 'Extraction & OCR complete',
+                    ok: extractionOk && ocrOk,
+                    detail: extractionOk && ocrOk ? (doc.ocr_status === 'accepted' ? 'OCR accepted' : 'text layer') : (doc.ocr_status || doc.extraction_status || '')
+                },
+                { label: 'All findings reviewed', ok: findings.length > 0 && pending === 0, detail: `${findings.length - pending} / ${findings.length}` },
+                { label: 'No critical findings pending', ok: critPending === 0, detail: critPending === 0 ? 'clear' : `${critPending} pending` }
+            ];
+            if (isPdf) {
+                rows.push({
+                    label: 'PDF boxes reviewed',
+                    ok: Number(boxes.total || 0) > 0 && Number(boxes.pending || 0) === 0,
+                    detail: `${Number(boxes.approved || 0)} approved · ${Number(boxes.pending || 0)} pending`
+                });
+            }
+            rows.push({ label: 'Redaction marked complete', ok: Boolean(Number(doc.redaction_completed || 0)), detail: Number(doc.redaction_completed || 0) ? 'done' : 'required' });
+            rows.push({ label: 'Human review approved', ok: Boolean(Number(doc.human_review_approved || 0)), detail: Number(doc.human_review_approved || 0) ? 'approved' : 'required' });
+
+            let html = '<div class="export-gate-title">Export gate</div>';
+            html += rows.map((row) => `
+                <div class="gate-row">
+                    <span class="gate-dot ${row.ok ? 'ok' : ''}">${row.ok ? '&#10003;' : ''}</span>
+                    <span class="gate-label">${escapeHtml(row.label)}</span>
+                    <span class="gate-detail">${escapeHtml(String(row.detail || ''))}</span>
+                </div>
+            `).join('');
+            {% if can_review %}
+            const exportable = isPdf || doc.file_extension === '.docx';
+            const allOk = rows.every((row) => row.ok);
+            const exported = (doc.artifacts || []).some((artifact) => artifact.artifact_type === (isPdf ? 'redacted_pdf' : 'redacted_docx'));
+            if (!Number(doc.redaction_completed || 0)) {
+                html += '<button type="button" class="gate-action gate-approve" onclick="reviewAction(\'mark_redacted\')">Mark redaction complete</button>';
+            } else if (!Number(doc.human_review_approved || 0)) {
+                html += '<button type="button" class="gate-action gate-approve" onclick="reviewAction(\'approve\')">Approve human review</button>';
+            }
+            if (exportable) {
+                const href = isPdf
+                    ? `/api/document/${doc.id}/redacted-export?format=pdf&style=black_box`
+                    : `/api/document/${doc.id}/redacted-export?format=docx&style=placeholder`;
+                const label = exported
+                    ? 'Exported &#10003; · saved to artifact timeline'
+                    : (isPdf ? 'Export reviewed redacted PDF' : 'Export reviewed DOCX');
+                html += `<a class="gate-action gate-export ${exported ? 'exported' : (allOk ? '' : 'disabled')}" href="${href}">${label}</a>`;
+            }
+            {% endif %}
+            target.innerHTML = html;
+        }
+
+        function stepStates(doc) {
+            const findings = doc.findings || [];
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
+            const boxes = doc.pdf_region_summary || {};
+            const isPdf = doc.file_extension === '.pdf';
+            const ocrStatus = doc.ocr_status || 'not_required';
+            const ocrBlocked = !['not_required', 'accepted'].includes(ocrStatus);
+            const extractionDone = (doc.extraction_status || '') === 'Complete';
+            const steps = [];
+            steps.push({
+                label: ocrBlocked ? 'Detect & OCR' : 'Detect',
+                done: !ocrBlocked && extractionDone,
+                hint: ocrBlocked
+                    ? `OCR is "${ocrStatus}". Run and accept OCR from the matter panel before reviewing.`
+                    : (isPdf
+                        ? 'Use "Generate suggested boxes" to create redaction boxes from detected findings, or draw boxes directly on the page.'
+                        : 'Findings are detected automatically after upload and OCR.')
+            });
+            if (isPdf) {
+                steps.push({
+                    label: 'Review boxes',
+                    done: Number(boxes.total || 0) > 0 && Number(boxes.pending || 0) === 0,
+                    hint: Number(boxes.total || 0) === 0
+                        ? 'No redaction boxes yet — use "Generate suggested boxes" or draw on the page. At least one approved box is required for export.'
+                        : `${Number(boxes.pending || 0)} box(es) awaiting review — click a box on the page (A = approve, Delete = reject) or use the box list below the pages.`
+                });
+            }
+            steps.push({
+                label: 'Review findings',
+                done: !ocrBlocked && extractionDone && pending === 0,
+                hint: `${pending} finding(s) awaiting review in the contextual review assistant.`,
+                // Grouped review is the fastest route through a large queue, so
+                // that is where the primary action sends a reviewer.
+                cta: pending ? { label: `Review ${pending} finding${pending === 1 ? '' : 's'}`, action: 'findings' } : null
+            });
+            const redacted = Boolean(Number(doc.redaction_completed || 0));
+            const approved = Boolean(Number(doc.human_review_approved || 0));
+            steps.push({
+                label: 'Complete & approve',
+                done: redacted && approved,
+                // The step used to tell the reviewer where to click. It now
+                // carries the action itself.
+                hint: redacted
+                    ? 'Record your sign-off to unlock reviewed redacted export.'
+                    : 'Mark redaction complete, then approve the review.',
+                cta: !redacted
+                    ? { label: 'Mark redaction complete', action: 'mark_redacted' }
+                    : (!approved ? { label: 'Approve review', action: 'approve' } : null)
+            });
+            steps.push({
+                label: 'Export & QA',
+                done: false,
+                hint: isPdf
+                    ? 'Run PDF QA, then download the reviewed redacted PDF from the Exports panel.'
+                    : 'Run export QA, then download the reviewed redacted export from the Exports panel.',
+                cta: { label: 'Open exports & QA', action: 'exports' }
+            });
+            return steps;
+        }
+
+        function setMobileTab(name) {
+            document.querySelector('.workspace').setAttribute('data-mobile-tab', name);
+            document.querySelectorAll('.mobile-tab').forEach((tab) => {
+                tab.classList.toggle('active', tab.dataset.tab === name);
+            });
+            if (name === 'document' && currentDoc && currentDoc.file_extension === '.pdf') {
+                renderPdfPreview();
+            }
+        }
+
+        function renderStepper(doc) {
+            const container = document.getElementById('workflowStepper');
+            const hintEl = document.getElementById('workflowHint');
+            if (!container || !hintEl) return;
+            const steps = stepStates(doc);
+            let activeIndex = steps.findIndex((step) => !step.done);
+            if (activeIndex === -1) activeIndex = steps.length - 1;
+            container.innerHTML = steps.map((step, index) => `
+                <div class="step ${step.done ? 'done' : ''} ${index === activeIndex ? 'active' : ''}" title="${escapeHtml(step.hint)}">
+                    <span class="step-num">${step.done ? '&#10003;' : index + 1}</span>${escapeHtml(step.label)}
+                </div>
+            `).join('');
+            const step = steps[activeIndex];
+            const allDone = steps.slice(0, -1).every((item) => item.done);
+            if (!canReview) {
+                hintEl.textContent = `Status: step ${activeIndex + 1} of ${steps.length} (${step.label}). Viewer role is read-only.`;
+                return;
+            }
+            hintEl.innerHTML = `
+                ${allDone ? '<span class="stepper-complete">Review complete</span>' : ''}
+                <span class="stepper-hint-text">Next: ${escapeHtml(step.hint)}</span>
+                ${step.cta ? `<button class="stepper-cta" type="button" onclick="stepAction('${step.cta.action}')">${escapeHtml(step.cta.label)}</button>` : ''}
+            `;
+        }
+
+        // The stepper's primary action. Each branch either performs the step or
+        // puts the reviewer exactly where it happens -- never just describes it.
+        function stepAction(action) {
+            if (action === 'findings') {
+                setReviewMode('groups');
+                document.getElementById('reviewGroups')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                return;
+            }
+            if (action === 'exports') {
+                const details = document.getElementById('exportReadinessDetails');
+                if (details) {
+                    details.open = true;
+                    details.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+                return;
+            }
+            if (action === 'mark_redacted' || action === 'approve') {
+                reviewAction(action);
+            }
+        }
+
+        function updateContextPanels(doc) {
+            const ocrPanel = document.getElementById('ocrPanel');
+            if (ocrPanel) {
+                const status = doc.ocr_status || 'not_required';
+                const extractionIncomplete = (doc.extraction_status || '') !== 'Complete';
+                ocrPanel.style.display = (status !== 'not_required' || extractionIncomplete) ? '' : 'none';
+            }
+        }
+
+        function renderArtifacts(artifacts) {
+            document.getElementById('artifactTimeline').innerHTML = artifacts.length
+                ? artifacts.slice(0, 6).map((artifact) => `
+                    <div class="gate-item">
+                        <strong>${escapeHtml(artifact.label || artifact.artifact_type)}</strong>
+                        <div>${escapeHtml(artifact.created_at || '')}</div>
+                        <div class="subtle">${escapeHtml([artifact.export_style, artifact.qa_status].filter(Boolean).join(' · ') || artifact.actor_username || '')}</div>
+                    </div>
+                `).join('')
+                : '<div class="gate-item">No artifacts recorded yet.</div>';
+        }
+
+        function renderExports(doc) {
+            {% if can_review %}
+            if (!canReview) return;
+            const isPdf = doc.file_extension === '.pdf';
+            const isDocx = doc.file_extension === '.docx';
+            const pdfSummary = doc.pdf_region_summary || {};
+            const stage = doc.pipeline_stage || '';
+            const primaryHref = isPdf
+                ? `/api/document/${doc.id}/redacted-export?format=pdf&style=black_box`
+                : `/api/document/${doc.id}/redacted-export?format=docx&style=placeholder`;
+            const primaryReady = (isPdf || isDocx) && stage === 'ready';
+            const primaryLabel = primaryReady
+                ? `Download safe version (${isPdf ? 'PDF' : 'DOCX'})`
+                : (isPdf || isDocx)
+                    ? `Download safe version — ${escapeHtml(doc.pipeline_message || 'not ready yet')}`
+                    : 'Native redacted export is not supported for this file type';
+            const canReviewedDocx = isDocx && Number(doc.redaction_completed || 0);
+            document.getElementById('exportLinks').innerHTML = `
+                <a class="button-link gate-export-primary ${primaryReady ? '' : 'disabled'}" href="${primaryHref}" title="${escapeHtml(doc.pipeline_message || '')}">${primaryLabel}</a>
+                <details class="export-options">
+                    <summary>Export options & QA</summary>
+                    <div class="button-grid" style="margin-top: 8px;">
+                        <a class="button-link ${canReviewedDocx ? '' : 'disabled'}" href="/api/document/${doc.id}/redacted-export?format=docx&style=mask">Reviewed DOCX, mask style</a>
+                        <button type="button" ${canReviewedDocx ? '' : 'disabled'} onclick="runExportQa('placeholder')">Run DOCX QA</button>
+                        <button type="button" ${isPdf ? '' : 'disabled'} onclick="runPdfQa()">Run PDF QA</button>
+                        <a class="button-link" href="/api/document/${doc.id}/export?format=docx">Preview DOCX (rebuilt, lower assurance)</a>
+                        <a class="button-link" href="/api/document/${doc.id}/export?format=txt">Preview TXT (lower assurance)</a>
+                        <button type="button" onclick="reloadDocument()">Refresh gate</button>
+                    </div>
+                    <span class="subtle">Reviewed DOCX preserves the source package. PDF black boxes are review overlays until the backend true-redaction export is downloaded. PDF boxes: ${Number(pdfSummary.approved || 0)} approved, ${Number(pdfSummary.pending || 0)} pending.</span>
+                </details>
+            `;
+            {% else %}
+            return;
+            {% endif %}
+        }
+
+        async function runExportQa(style = 'placeholder') {
+            if (!canReview) return;
+            const reportEl = document.getElementById('qaReport');
+            reportEl.innerHTML = '<div class="qa-item">Running DOCX export QA...</div>';
+            const response = await fetch(`/api/document/${docId}/redacted-export/qa?format=docx&style=${encodeURIComponent(style)}`);
+            const data = await response.json();
+            if (!response.ok) {
+                reportEl.innerHTML = `<div class="qa-item"><strong>QA blocked</strong>${escapeHtml(data.error || 'Could not run export QA.')}</div>`;
+                showToast(data.error || 'Could not run export QA.');
+                return;
+            }
+            renderQaReport(data);
+        }
+
+        function renderQaReport(report) {
+            const statusClass = report.overall_status === 'pass' ? 'ready' : report.overall_status === 'fail' ? 'blocked' : 'needs';
+            const checks = (report.checks || []).map((check) => {
+                const cls = check.status === 'pass' ? 'ready' : check.status === 'fail' ? 'blocked' : 'needs';
+                return `<div class="qa-item"><strong><span class="badge ${cls}">${escapeHtml(check.status)}</span> ${escapeHtml(check.name)}</strong>${escapeHtml(check.detail || '')}</div>`;
+            }).join('');
+            if (report.format === 'pdf') {
+                const visual = report.visual_qa || {};
+                let visualHtml = '';
+                if (visual.status === 'rendered') {
+                    visualHtml = `
+                        <div class="qa-item">
+                            <strong>Visual QA — page ${escapeHtml(String(visual.page_number || 1))}</strong>
+                            <div class="qa-thumbs">
+                                <figure><img src="data:image/png;base64,${visual.before_png_base64}" alt="Page before redaction"><figcaption>Before</figcaption></figure>
+                                <figure><img src="data:image/png;base64,${visual.after_png_base64}" alt="Page after redaction"><figcaption>After</figcaption></figure>
+                            </div>
+                            <div class="subtle">${escapeHtml(visual.note || '')}</div>
+                        </div>
+                    `;
+                } else if (visual.status) {
+                    visualHtml = `<div class="qa-item"><strong>Visual QA thumbnails skipped</strong>${escapeHtml(visual.note || 'Local rendering was unavailable.')}</div>`;
+                }
+                document.getElementById('qaReport').innerHTML = `
+                    <div class="qa-item">
+                        <strong><span class="badge ${statusClass}">${escapeHtml(report.overall_status)}</span> PDF Export QA</strong>
+                        ${escapeHtml(report.summary || '')}
+                        <div class="subtle">${escapeHtml(String(report.region_count || 0))} approved region(s); ${escapeHtml(String(report.leakage_count || 0))} leakage warning(s); target: ${escapeHtml(report.qa_target || 'freshly_generated')}.</div>
+                    </div>
+                    ${checks}
+                    ${visualHtml}
+                `;
+                return;
+            }
+            const partWarnings = (report.part_reports || [])
+                .filter((part) => part.status !== 'pass')
+                .slice(0, 4)
+                .map((part) => `<div class="qa-item"><strong>${escapeHtml(part.part_name)}</strong>Text nodes ${escapeHtml(String(part.text_nodes_before))} -> ${escapeHtml(String(part.text_nodes_after))}; paragraph delta ${escapeHtml(String(part.paragraph_delta))}; table delta ${escapeHtml(String(part.table_delta))}</div>`)
+                .join('');
+            document.getElementById('qaReport').innerHTML = `
+                <div class="qa-item">
+                    <strong><span class="badge ${statusClass}">${escapeHtml(report.overall_status)}</span> DOCX Export QA</strong>
+                    ${escapeHtml(report.summary || '')}
+                    <div class="subtle">${escapeHtml(report.visual_note || '')}</div>
+                </div>
+                ${checks}
+                ${partWarnings}
+            `;
+        }
+
+        function renderFindingGroups(findings) {
+            const grouped = {};
+            findings.forEach((finding) => {
+                const label = groupLabels[finding.category] || 'Other';
+                if (!grouped[label]) grouped[label] = [];
+                grouped[label].push(finding);
+            });
+            const labels = Object.keys(grouped).sort();
+            document.getElementById('findingGroups').innerHTML = labels.length
+                ? labels.map((label) => groupHtml(label, grouped[label])).join('')
+                : '<div class="subtle">No automated findings.</div>';
+        }
+
+        function groupBulkButtonsHtml(pending, categories) {
+            if (!canReview || !pending) return '';
+            const categoriesCsv = escapeHtml(categories.join(','));
+            return `
+                <div class="group-actions">
+                    <button class="approve" type="button" onclick="groupBulkAction('approve', '${categoriesCsv}')">Approve all</button>
+                    <button class="danger" type="button" onclick="groupBulkAction('reject', '${categoriesCsv}')">Reject all</button>
+                </div>
+            `;
+        }
+
+        async function groupBulkAction(action, categoriesCsv) {
+            if (!canReview) return;
+            if (action === 'reject' && !window.confirm('Reject all pending findings in this group? Rejected findings will not be redacted on export.')) return;
+            const categories = String(categoriesCsv || '').split(',').filter(Boolean);
+            const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, categories, only_pending: true })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'Bulk review failed.');
+                return;
+            }
+            const data = await response.json();
+            if (currentDoc && currentDoc.file_extension === '.pdf') {
+                const regionIds = pdfRegions
+                    .filter((region) => {
+                        const finding = (currentDoc.findings || []).find((f) => f.id === region.finding_id);
+                        return finding && categories.includes(finding.category) && (region.review_status || 'pending') === 'pending';
+                    })
+                    .map((region) => region.id);
+                if (regionIds.length) {
+                    await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action, region_ids: regionIds, only_pending: true })
+                    });
+                }
+            }
+            showToast(`${data.updated} finding(s) ${action === 'approve' ? 'approved' : 'rejected'}.`);
+            await reloadDocument();
+        }
+
+        function groupHtml(label, findings) {
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
+            const categories = [...new Set(findings.map((finding) => finding.category))];
+            return `
+                <section class="group">
+                    <div class="group-title">
+                        <h3>${escapeHtml(label)}</h3>
+                        <span class="badge">${findings.length} · ${pending} pending</span>
+                    </div>
+                    ${groupBulkButtonsHtml(pending, categories)}
+                    ${findings.map(findingHtml).join('')}
+                </section>
+            `;
+        }
+
+        const VERIFICATION_STATUS_LABELS = {
+            pending_export: 'Awaiting export QA',
+            redacted_verified: 'Verified redacted (QA passed)',
+            qa_warning: 'QA warning: text may still be extractable'
+        };
+
+        function verificationStatusLabel(status) {
+            return VERIFICATION_STATUS_LABELS[status || 'pending_export'] || status;
+        }
+
+        function evidenceAnchorHtml(evidence) {
+            const anchor = evidence.context || evidence.source_part;
+            return anchor ? `<div class="subtle">${escapeHtml(anchor)}</div>` : '';
+        }
+
+        function findingRationaleHtml(finding) {
+            const explanations = findingExplanations || {};
+            const info = (explanations.categories || {})[finding.category] || {
+                label: (finding.category || 'Finding').replace(/_/g, ' '),
+                basis: 'Detected by the privacy scanner.',
+                concern: 'Review whether this value could re-identify a person or matter.'
+            };
+            const riskMeaning = (explanations.risks || {})[finding.risk] || '';
+            const isDirect = (explanations.direct_identifiers || []).includes(finding.category);
+            const redaction = finding.replacement_text || finding.placeholder || '[REDACTED]';
+            const rows = [
+                ['What', `${escapeHtml(info.label)}${isDirect ? ' · direct identifier' : ''}`],
+                ['Detected because', escapeHtml(info.basis)],
+                ['Why it matters', escapeHtml(info.concern)],
+                [`${escapeHtml(finding.risk)} risk`, escapeHtml(riskMeaning)],
+                ['On export', `Replaced with <code>${escapeHtml(redaction)}</code> (or a black box in mask mode) once approved.`]
+            ].filter((row) => row[1]);
+            return `
+                <details class="finding-why" onclick="event.stopPropagation()">
+                    <summary>Why flagged?</summary>
+                    <dl class="why-grid">
+                        ${rows.map(([term, desc]) => `<dt>${term}</dt><dd>${desc}</dd>`).join('')}
+                    </dl>
+                </details>
+            `;
+        }
+
+        function findingHtml(finding) {
+            const evidence = finding.evidence || {};
+            const selectedCls = finding.id === selectedFindingId ? ' selected' : '';
+            const anchorHtml = evidenceAnchorHtml(evidence);
+            const verificationLabel = verificationStatusLabel(evidence.verification_status);
+            {% if can_review %}
+            return `
+                <div class="finding selectable${selectedCls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, false)">
+                    <div class="finding-meta">
+                        <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
+                        <span class="badge">${escapeHtml(finding.category)}</span>
+                        <span class="badge">${escapeHtml(finding.review_status || 'pending')}</span>
+                    </div>
+                    <div class="finding-sample">${escapeHtml(finding.sample || '-')}</div>
+                    ${anchorHtml}
+                    <div class="subtle">${escapeHtml(verificationLabel)}</div>
+                    <div class="subtle">${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</div>
+                    ${findingRationaleHtml(finding)}
+                    <div class="finding-actions">
+                        <button class="approve" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'approve')">Approve</button>
+                        <button class="danger" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'reject')">Reject</button>
+                    </div>
+                </div>
+            `;
+            {% else %}
+            return `
+                <div class="finding selectable${selectedCls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, false)">
+                    <div class="finding-meta">
+                        <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
+                        <span class="badge">${escapeHtml(finding.category)}</span>
+                        <span class="badge">${escapeHtml(finding.review_status || 'pending')}</span>
+                    </div>
+                    <div class="finding-sample">${escapeHtml(finding.sample || '-')}</div>
+                    ${anchorHtml}
+                    <div class="subtle">${escapeHtml(verificationLabel)}</div>
+                    <div class="subtle">${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</div>
+                    ${findingRationaleHtml(finding)}
+                </div>
+            `;
+            {% endif %}
+        }
+
+        async function findingAction(findingId, action) {
+            if (!canReview) return;
+            const isDocView = currentDoc && currentDoc.file_extension !== '.pdf';
+            const nextId = isDocView ? nextPendingFindingAfter(findingId) : null;
+            const response = await fetch(`/api/finding/${findingId}/review`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'Action failed.');
+                return;
+            }
+            await reloadDocument();
+            if (isDocView && nextId) {
+                selectFinding(nextId, false);
+                const card = document.querySelector(`.finding[data-finding-id="${nextId}"]`);
+                if (card) card.scrollIntoView({ block: 'nearest' });
+            }
+            if (action === 'approve' || action === 'reject') {
+                showToast(`Finding ${action === 'approve' ? 'approved' : 'rejected'}.`, {
+                    label: 'Undo',
+                    onClick: () => undoFinding(findingId)
+                });
+            } else {
+                showToast('Finding updated.');
+            }
+        }
+
+        async function undoFinding(findingId, regionIdsCsv) {
+            if (!canReview) return;
+            const response = await fetch(`/api/finding/${findingId}/review`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'pending' })
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'Undo failed.');
+                return;
+            }
+            const regionIds = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
+            if (regionIds.length) {
+                await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'pending', region_ids: regionIds, only_pending: false })
+                });
+            }
+            await reloadDocument();
+            showToast('Decision reverted to pending.');
+        }
+
+        async function batchReview(action, risks) {
+            if (!canReview) return;
+            if (action === 'reject' && !window.confirm('Reject all pending findings? Rejected findings will not be redacted on export.')) return;
+            const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, risks, only_pending: true })
+            });
+            await handleMutation(response, 'Batch review updated.');
+        }
+
+        async function reviewAction(action) {
+            if (!canReview) return;
+            if (action === 'approve' && !window.confirm('Approve human review? This records your sign-off and unlocks reviewed redacted export for this document.')) return;
+            const response = await fetch(`/api/document/${docId}/review`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action })
+            });
+            await handleMutation(response, 'Document review updated.');
+        }
+
+        async function reextractDocument() {
+            if (!canReview) return;
+            if (!window.confirm('Re-run extraction and detection? Existing detector findings are replaced and the document returns to pending review.')) return;
+            const response = await fetch(`/api/document/${docId}/reextract`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            docTextLoadedFor = null;
+            await handleMutation(response, 'Extraction re-run complete.');
+        }
+
+        async function ocrAction(action) {
+            if (!canReview) return;
+            if (action === 'accept' && !window.confirm('Accept this OCR text? It replaces the extracted text, re-runs detection, and returns the document to pending review.')) return;
+            if (action === 'reject' && !window.confirm('Reject this OCR output? The document returns to the OCR queue.')) return;
+            const response = await fetch(`/api/document/${docId}/ocr/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            docTextLoadedFor = null;
+            await handleMutation(response, 'OCR status updated.');
+        }
+
+        function renderOcrReview(doc) {
+            const block = document.getElementById('ocrReviewBlock');
+            if (!block) return;
+            if ((doc.ocr_status || 'not_required') !== 'completed') {
+                block.hidden = true;
+                block.innerHTML = '';
+                return;
+            }
+            const pages = (doc.ocr_pages || []).filter((page) => page.status === 'completed' && page.text);
+            const summary = doc.ocr_summary || {};
+            const confidence = summary.average_confidence != null
+                ? ` · average confidence ${(Number(summary.average_confidence) * 100).toFixed(0)}%`
+                : '';
+            const pagesHtml = pages.length
+                ? pages.map((page) => `
+                    <div>
+                        <div class="subtle">Page ${escapeHtml(String(page.page_number))}</div>
+                        <div class="ocr-review-page">${escapeHtml(page.text)}</div>
+                    </div>
+                `).join('')
+                : '<div class="subtle">OCR completed but produced no reviewable page text.</div>';
+            const actions = canReview
+                ? `<div class="ocr-review-actions">
+                        <button class="approve" type="button" onclick="ocrAction('accept')">Accept OCR text</button>
+                        <button class="danger" type="button" onclick="ocrAction('reject')">Reject OCR text</button>
+                   </div>`
+                : '<div class="subtle">A reviewer must accept or reject this OCR text.</div>';
+            block.innerHTML = `
+                <div><strong>OCR text needs your review</strong>
+                <div class="subtle">Read the recognized text below${confidence}. It only affects findings and export readiness after you accept it.</div></div>
+                ${pagesHtml}
+                ${actions}
+            `;
+            block.hidden = false;
+        }
+
+        function skeletonHtml(lines = 6) {
+            const widths = ['w85', 'w75', 'w60', 'w85', 'w40', 'w75'];
+            return Array.from({ length: lines }, (_, i) => `<div class="skeleton-line ${widths[i % widths.length]}"></div>`).join('');
+        }
+
+        function clamp01(value) {
+            return Math.max(0, Math.min(1, value));
+        }
+
+        function normalizedRect(a, b) {
+            return {
+                x0: Math.min(a.x, b.x),
+                y0: Math.min(a.y, b.y),
+                x1: Math.max(a.x, b.x),
+                y1: Math.max(a.y, b.y)
+            };
+        }
+
+        function pdfPointFromEvent(event, pageEl) {
+            const rect = pageEl.getBoundingClientRect();
+            return {
+                x: clamp01((event.clientX - rect.left) / rect.width),
+                y: clamp01((event.clientY - rect.top) / rect.height)
+            };
+        }
+
+        async function ensurePdfDoc() {
+            if (pdfDoc) return pdfDoc;
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = "{{ url_for('static', filename='vendor/pdfjs/pdf.worker.min.js') }}";
+            pdfDoc = await window.pdfjsLib.getDocument(`/api/document/${docId}/source-file`).promise;
+            return pdfDoc;
+        }
+
+        async function renderPdfPreview() {
+            const container = document.getElementById('pdfPages');
+            if (!window.pdfjsLib) {
+                container.innerHTML = '<div class="qa-item">The bundled PDF.js viewer could not be initialized. Manual coordinate boxes still work, and backend redaction export is unaffected.</div>';
+                return;
+            }
+            if (!pdfDoc) {
+                container.innerHTML = `<div class="doc-paper" style="padding: 28px 32px;">${skeletonHtml(8)}</div>`;
+                try {
+                    await ensurePdfDoc();
+                } catch (err) {
+                    container.innerHTML = '<div class="qa-item">The PDF source could not be rendered locally. Manual coordinate boxes still work, and backend redaction export is unaffected.</div>';
+                    return;
+                }
+            }
+            if (!pdfInitialFitDone) {
+                pdfInitialFitDone = true;
+                const page = await pdfDoc.getPage(pdfCurrentPage);
+                const base = page.getViewport({ scale: 1 });
+                const available = Math.max(240, container.clientWidth - 24);
+                pdfZoomScale = Math.max(0.4, Math.min(3, Math.round((available / base.width) * 100) / 100));
+            }
+            await renderPdfPages();
+        }
+
+        async function renderPdfPages(force = false) {
+            if (!pdfDoc) return;
+            pdfCurrentPage = Math.min(Math.max(1, pdfCurrentPage), pdfDoc.numPages);
+            const signature = `${pdfCurrentPage}:${pdfZoomScale}:${pdfShowAll}`;
+            if (!force && signature === pdfRenderedSignature) {
+                updatePdfNav();
+                renderPdfRegionOverlays();
+                return;
+            }
+            const token = ++pdfRenderToken;
+            const container = document.getElementById('pdfPages');
+            const pageNumbers = [];
+            if (pdfShowAll) {
+                const limit = Math.min(pdfDoc.numPages, 30);
+                for (let n = 1; n <= limit; n += 1) pageNumbers.push(n);
+            } else {
+                pageNumbers.push(pdfCurrentPage);
+            }
+            container.innerHTML = '';
+            if (pdfShowAll && pdfDoc.numPages > 30) {
+                container.innerHTML = '<div class="qa-item">Showing the first 30 pages. Use single-page mode with the page input for later pages.</div>';
+            }
+            for (const pageNumber of pageNumbers) {
+                if (token !== pdfRenderToken) return;
+                const page = await pdfDoc.getPage(pageNumber);
+                const viewport = page.getViewport({ scale: pdfZoomScale });
+                const head = document.createElement('div');
+                head.className = 'pdf-page-head';
+                head.dataset.pageHead = String(pageNumber);
+                const pageEl = document.createElement('div');
+                pageEl.className = canReview ? 'pdf-page drawable' : 'pdf-page';
+                pageEl.dataset.pageNumber = String(pageNumber);
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                pageEl.style.width = `${viewport.width}px`;
+                pageEl.style.height = `${viewport.height}px`;
+                pageEl.appendChild(canvas);
+                pageEl.addEventListener('mousedown', (event) => startPdfDraw(event, pageEl));
+                container.appendChild(head);
+                container.appendChild(pageEl);
+                await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+            }
+            if (token !== pdfRenderToken) return;
+            pdfRenderedSignature = signature;
+            updatePdfNav();
+            renderPdfRegionOverlays();
+        }
+
+        function pdfPageCounts(pageNumber) {
+            const counts = { total: 0, pending: 0, approved: 0, rejected: 0 };
+            pdfRegions.forEach((region) => {
+                if (region.page_number !== pageNumber) return;
+                counts.total += 1;
+                counts[region.review_status || 'pending'] = (counts[region.review_status || 'pending'] || 0) + 1;
+            });
+            return counts;
+        }
+
+        function updatePdfNav() {
+            if (!pdfDoc) return;
+            document.getElementById('pdfPageInput').value = String(pdfCurrentPage);
+            document.getElementById('pdfPageTotal').textContent = `/ ${pdfDoc.numPages}`;
+            document.getElementById('pdfZoomLabel').textContent = `${Math.round(pdfZoomScale * 100)}%`;
+            const counts = pdfPageCounts(pdfCurrentPage);
+            document.getElementById('pdfPageCounters').textContent =
+                `Page boxes: ${counts.total} total · ${counts.pending} pending · ${counts.approved} approved · ${counts.rejected} rejected`;
+            document.querySelectorAll('.pdf-page-head').forEach((head) => {
+                const pageNumber = Number(head.dataset.pageHead);
+                const pageCounts = pdfPageCounts(pageNumber);
+                head.textContent = `Page ${pageNumber} — ${pageCounts.total} boxes (${pageCounts.pending} pending, ${pageCounts.approved} approved, ${pageCounts.rejected} rejected)`;
+            });
+        }
+
+        function pdfPrevPage() {
+            if (!pdfDoc || pdfShowAll) return;
+            pdfCurrentPage = Math.max(1, pdfCurrentPage - 1);
+            renderPdfPages();
+        }
+
+        function pdfNextPage() {
+            if (!pdfDoc || pdfShowAll) return;
+            pdfCurrentPage = Math.min(pdfDoc.numPages, pdfCurrentPage + 1);
+            renderPdfPages();
+        }
+
+        function pdfGoToPage(value) {
+            if (!pdfDoc) return;
+            const target = Number(value);
+            if (!Number.isInteger(target) || target < 1 || target > pdfDoc.numPages) {
+                showToast(`Page must be between 1 and ${pdfDoc.numPages}.`);
+                updatePdfNav();
+                return;
+            }
+            pdfCurrentPage = target;
+            pdfShowAll = false;
+            document.getElementById('pdfShowAllBtn').textContent = 'Show all pages';
+            renderPdfPages();
+        }
+
+        function pdfZoom(delta) {
+            pdfZoomScale = Math.max(0.4, Math.min(3, Math.round((pdfZoomScale + delta) * 10) / 10));
+            renderPdfPages();
+        }
+
+        async function pdfFitWidth() {
+            if (!pdfDoc) return;
+            const container = document.getElementById('pdfPages');
+            const page = await pdfDoc.getPage(pdfCurrentPage);
+            const base = page.getViewport({ scale: 1 });
+            const available = Math.max(240, container.clientWidth - 24);
+            pdfZoomScale = Math.max(0.4, Math.min(3, Math.round((available / base.width) * 100) / 100));
+            renderPdfPages();
+        }
+
+        function pdfToggleShowAll() {
+            pdfShowAll = !pdfShowAll;
+            document.getElementById('pdfShowAllBtn').textContent = pdfShowAll ? 'Single page' : 'Show all pages';
+            renderPdfPages();
+        }
+
+        async function loadPdfRegions() {
+            if (!currentDoc || currentDoc.file_extension !== '.pdf') return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions`);
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'PDF regions could not be loaded.');
+                return;
+            }
+            const data = await response.json();
+            pdfRegions = data.regions || [];
+            if (pdfSelectedRegionId && !pdfRegions.some((region) => region.id === pdfSelectedRegionId)) {
+                pdfSelectedRegionId = null;
+            }
+            renderPdfRegionOverlays();
+            renderReviewQueue();
+            updatePdfNav();
+            updatePdfSelectionPanel();
+            renderAssistant(currentDoc);
+            renderBulkReviewTable(currentDoc.findings || []);
+        }
+
+        function selectedPdfRegion() {
+            return pdfRegions.find((region) => region.id === pdfSelectedRegionId) || null;
+        }
+
+        function applyRectToBox(box, rect, pageEl) {
+            const width = pageEl.clientWidth;
+            const height = pageEl.clientHeight;
+            box.style.left = `${Math.min(rect.x0, rect.x1) * width}px`;
+            box.style.top = `${Math.min(rect.y0, rect.y1) * height}px`;
+            box.style.width = `${Math.abs(rect.x1 - rect.x0) * width}px`;
+            box.style.height = `${Math.abs(rect.y1 - rect.y0) * height}px`;
+        }
+
+        function renderPdfRegionOverlays() {
+            document.querySelectorAll('.pdf-region, .pdf-region-draft').forEach((el) => el.remove());
+            pdfRegions.forEach((region) => {
+                const pageEl = document.querySelector(`.pdf-page[data-page-number="${region.page_number}"]`);
+                if (!pageEl || !region.rect) return;
+                const box = document.createElement('div');
+                const selected = region.id === pdfSelectedRegionId;
+                box.className = `pdf-region ${escapeHtml(region.review_status || 'pending')} ${region.source === 'manual' ? 'manual' : ''} ${selected ? 'selected' : ''}`;
+                applyRectToBox(box, region.rect, pageEl);
+                box.title = `${region.category} · ${region.review_status}`;
+                box.dataset.regionId = String(region.id);
+                box.addEventListener('mousedown', (event) => startPdfRegionDrag(event, region, box, pageEl, 'move'));
+                if (selected && canReview) {
+                    ['nw', 'ne', 'sw', 'se'].forEach((corner) => {
+                        const handle = document.createElement('div');
+                        handle.className = `pdf-region-handle ${corner}`;
+                        handle.addEventListener('mousedown', (event) => startPdfRegionDrag(event, region, box, pageEl, 'resize', corner));
+                        box.appendChild(handle);
+                    });
+                }
+                pageEl.appendChild(box);
+            });
+        }
+
+        function startPdfDraw(event, pageEl) {
+            if (!canReview || event.button !== 0 || pdfDrag) return;
+            if (event.target.closest('.pdf-region')) return;
+            event.preventDefault();
+            const start = pdfPointFromEvent(event, pageEl);
+            const draft = document.createElement('div');
+            draft.className = 'pdf-region-draft';
+            pageEl.appendChild(draft);
+            pdfDrag = { mode: 'draw', pageEl, start, draft, moved: false };
+            applyRectToBox(draft, normalizedRect(start, start), pageEl);
+            window.addEventListener('mousemove', onPdfDragMove);
+            window.addEventListener('mouseup', onPdfDragEnd);
+        }
+
+        function startPdfRegionDrag(event, region, box, pageEl, mode, corner) {
+            if (event.button !== 0 || pdfDrag) return;
+            event.preventDefault();
+            event.stopPropagation();
+            selectPdfRegion(region.id, false);
+            if (!canReview) return;
+            const rect = region.rect;
+            pdfDrag = {
+                mode,
+                corner,
+                region,
+                box,
+                pageEl,
+                start: pdfPointFromEvent(event, pageEl),
+                orig: {
+                    x0: Math.min(rect.x0, rect.x1),
+                    y0: Math.min(rect.y0, rect.y1),
+                    x1: Math.max(rect.x0, rect.x1),
+                    y1: Math.max(rect.y0, rect.y1)
+                },
+                moved: false
+            };
+            box.classList.add('dragging');
+            window.addEventListener('mousemove', onPdfDragMove);
+            window.addEventListener('mouseup', onPdfDragEnd);
+        }
+
+        function pdfDragRect(point) {
+            const drag = pdfDrag;
+            if (drag.mode === 'draw') {
+                return normalizedRect(drag.start, point);
+            }
+            if (drag.mode === 'move') {
+                const width = drag.orig.x1 - drag.orig.x0;
+                const height = drag.orig.y1 - drag.orig.y0;
+                const x0 = clamp01(Math.min(drag.orig.x0 + (point.x - drag.start.x), 1 - width));
+                const y0 = clamp01(Math.min(drag.orig.y0 + (point.y - drag.start.y), 1 - height));
+                return { x0, y0, x1: x0 + width, y1: y0 + height };
+            }
+            const anchor = {
+                nw: { x: pdfDrag.orig.x1, y: pdfDrag.orig.y1 },
+                ne: { x: pdfDrag.orig.x0, y: pdfDrag.orig.y1 },
+                sw: { x: pdfDrag.orig.x1, y: pdfDrag.orig.y0 },
+                se: { x: pdfDrag.orig.x0, y: pdfDrag.orig.y0 }
+            }[pdfDrag.corner];
+            return normalizedRect(anchor, point);
+        }
+
+        function onPdfDragMove(event) {
+            if (!pdfDrag) return;
+            const point = pdfPointFromEvent(event, pdfDrag.pageEl);
+            pdfDrag.moved = true;
+            const rect = pdfDragRect(point);
+            applyRectToBox(pdfDrag.mode === 'draw' ? pdfDrag.draft : pdfDrag.box, rect, pdfDrag.pageEl);
+            pdfDrag.lastRect = rect;
+        }
+
+        async function onPdfDragEnd(event) {
+            window.removeEventListener('mousemove', onPdfDragMove);
+            window.removeEventListener('mouseup', onPdfDragEnd);
+            const drag = pdfDrag;
+            pdfDrag = null;
+            if (!drag) return;
+            const rect = drag.lastRect || pdfDragRect(pdfPointFromEvent(event, drag.pageEl));
+            if (drag.mode === 'draw') {
+                drag.draft.remove();
+                if (!drag.moved || Math.abs(rect.x1 - rect.x0) < 0.004 || Math.abs(rect.y1 - rect.y0) < 0.004) {
+                    selectPdfRegion(null, false);
+                    return;
+                }
+                const category = document.getElementById('pdfDrawCategory').value || 'manual_sensitive_text';
+                const response = await fetch(`/api/document/${docId}/pdf/regions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        page_number: Number(drag.pageEl.dataset.pageNumber),
+                        category,
+                        source: 'manual',
+                        rect
+                    })
+                });
+                await handleMutation(response, 'Redaction box drawn. It is pending review.');
+                return;
+            }
+            drag.box.classList.remove('dragging');
+            if (!drag.moved) return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions/${drag.region.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rect, review_status: 'pending' })
+            });
+            await handleMutation(response, 'Box updated. It is pending review again.');
+        }
+
+        function selectPdfRegion(regionId, jumpToPage) {
+            pdfSelectedRegionId = regionId;
+            const region = selectedPdfRegion();
+            if (region && region.finding_id) selectedFindingId = region.finding_id;
+            if (region && jumpToPage && !pdfShowAll && region.page_number !== pdfCurrentPage) {
+                pdfCurrentPage = region.page_number;
+                renderPdfPages().then(() => {
+                    renderPdfRegionOverlays();
+                    updatePdfSelectionPanel();
+                    highlightQueueItem();
+                    if (currentDoc) {
+                        renderAssistant(currentDoc);
+                        renderBulkReviewTable(currentDoc.findings || []);
+                    }
+                });
+                return;
+            }
+            renderPdfRegionOverlays();
+            updatePdfSelectionPanel();
+            highlightQueueItem();
+            if (currentDoc) {
+                renderAssistant(currentDoc);
+                renderBulkReviewTable(currentDoc.findings || []);
+            }
+        }
+
+        function updatePdfSelectionPanel() {
+            const panel = document.getElementById('pdfSelectionPanel');
+            if (!panel) return;
+            const region = selectedPdfRegion();
+            if (!region) {
+                panel.hidden = true;
+                return;
+            }
+            panel.hidden = false;
+            document.getElementById('pdfSelectionMeta').textContent =
+                `#${region.id} · page ${region.page_number} · ${region.source} · ${region.review_status}`;
+            const categorySelect = document.getElementById('pdfSelectionCategory');
+            if (![...categorySelect.options].some((option) => option.value === region.category)) {
+                const option = document.createElement('option');
+                option.value = region.category;
+                option.textContent = region.category;
+                categorySelect.appendChild(option);
+            }
+            categorySelect.value = region.category;
+            document.getElementById('pdfSelectionNote').value = region.reviewer_note || '';
+        }
+
+        async function savePdfSelection() {
+            const region = selectedPdfRegion();
+            if (!canReview || !region) return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions/${region.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    category: document.getElementById('pdfSelectionCategory').value,
+                    reviewer_note: document.getElementById('pdfSelectionNote').value || null
+                })
+            });
+            await handleMutation(response, 'Box details saved.');
+        }
+
+        async function selectedPdfRegionAction(action) {
+            const region = selectedPdfRegion();
+            if (!region) return;
+            await pdfRegionAction(region.id, action);
+        }
+
+        function docFindingOrder() {
+            const findings = (currentDoc && currentDoc.findings) || [];
+            return [...findings].sort((a, b) => {
+                const aStart = Number.isInteger(a.start_offset) ? a.start_offset : Number.MAX_SAFE_INTEGER;
+                const bStart = Number.isInteger(b.start_offset) ? b.start_offset : Number.MAX_SAFE_INTEGER;
+                return aStart - bStart || a.id - b.id;
+            });
+        }
+
+        function selectAdjacentFinding(direction) {
+            const order = docFindingOrder();
+            if (!order.length) return;
+            const index = order.findIndex((finding) => finding.id === selectedFindingId);
+            const next = index === -1
+                ? (direction > 0 ? order[0] : order[order.length - 1])
+                : order[Math.min(order.length - 1, Math.max(0, index + direction))];
+            if (!next || next.id === selectedFindingId) return;
+            selectFinding(next.id, false);
+            focusAssistantCard();
+        }
+
+        function nextPendingFindingAfter(findingId) {
+            const order = docFindingOrder();
+            const index = order.findIndex((finding) => finding.id === findingId);
+            const after = order.slice(index + 1).concat(order.slice(0, Math.max(index, 0)));
+            const next = after.find((finding) => finding.id !== findingId && (finding.review_status || 'pending') === 'pending');
+            return next ? next.id : null;
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (!canReview || !currentDoc) return;
+            if (event.metaKey || event.ctrlKey || event.altKey) return;
+            const target = event.target;
+            if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+            if (event.key === 'Escape') {
+                selectedFindingId = null;
+                if (currentDoc.file_extension === '.pdf') selectPdfRegion(null, false);
+                else {
+                    renderDocView();
+                    renderFindingGroups(currentDoc.findings || []);
+                    renderAssistant(currentDoc);
+                    renderBulkReviewTable(currentDoc.findings || []);
+                }
+                return;
+            }
+            if (event.key === 'j' || event.key === 'J' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                selectAdjacentFinding(1);
+                return;
+            }
+            if (event.key === 'k' || event.key === 'K' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                selectAdjacentFinding(-1);
+                return;
+            }
+            if ((event.key === 'e' || event.key === 'E') && selectedFindingId) {
+                event.preventDefault();
+                setReviewMode('guided');
+                const editField = document.getElementById('assistantReplacement');
+                if (editField) editField.focus();
+                return;
+            }
+            if (!selectedFindingId) {
+                const region = currentDoc.file_extension === '.pdf' ? selectedPdfRegion() : null;
+                if (!region) return;
+                if (event.key === 'a' || event.key === 'A') {
+                    event.preventDefault();
+                    selectedPdfRegionAction('approve');
+                } else if (event.key === 'r' || event.key === 'R' || event.key === 'Delete' || event.key === 'Backspace') {
+                    event.preventDefault();
+                    selectedPdfRegionAction('reject');
+                }
+                return;
+            }
+            if (event.key === 'a' || event.key === 'A') {
+                event.preventDefault();
+                reviewAssistantAction('approve');
+            } else if (event.key === 'r' || event.key === 'R' || event.key === 'Delete' || event.key === 'Backspace') {
+                event.preventDefault();
+                reviewAssistantAction('reject');
+            }
+        });
+
+        function buildReviewQueue() {
+            const findings = (currentDoc && currentDoc.findings) || [];
+            const regionsByFinding = {};
+            const standalone = [];
+            pdfRegions.forEach((region) => {
+                if (region.finding_id) {
+                    (regionsByFinding[region.finding_id] = regionsByFinding[region.finding_id] || []).push(region);
+                } else {
+                    standalone.push(region);
+                }
+            });
+            const grouped = {};
+            findings.forEach((finding) => {
+                const label = groupLabels[finding.category] || 'Other';
+                (grouped[label] = grouped[label] || []).push({ finding, regions: regionsByFinding[finding.id] || [] });
+            });
+            if (standalone.length) {
+                grouped['Manual boxes'] = standalone.map((region) => ({ finding: null, regions: [region] }));
+            }
+            return grouped;
+        }
+
+        function queueItemHtml(item) {
+            const finding = item.finding;
+            const regions = item.regions;
+            const regionIds = regions.map((region) => region.id).join(',');
+            const pendingBoxes = regions.filter((region) => (region.review_status || 'pending') === 'pending').length;
+            const pages = [...new Set(regions.map((region) => region.page_number))].join(', ');
+            const boxNote = regions.length
+                ? `${regions.length} box(es) on page ${pages}${pendingBoxes ? ` · ${pendingBoxes} pending` : ' · all reviewed'} — click to locate`
+                : 'No box on the page yet — draw one or use Generate Boxes';
+            const status = finding ? (finding.review_status || 'pending') : (regions[0].review_status || 'pending');
+            const risk = finding ? finding.risk : 'HIGH';
+            const category = finding ? finding.category : (regions[0].category || 'manual_sensitive_text');
+            const sample = finding ? (finding.sample || '-') : `Manual box (${regions[0].source || 'manual'})`;
+            const note = !finding && regions[0].reviewer_note ? `<div class="queue-boxes">Note: ${escapeHtml(regions[0].reviewer_note)}</div>` : '';
+            const actions = canReview ? `
+                <div class="finding-actions">
+                    <button type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'approve')">Approve</button>
+                    <button class="danger" type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'reject')">Reject</button>
+                </div>` : '';
+            return `
+                <div class="finding queue-item" data-region-ids="${regionIds}" onclick="queueLocate('${regionIds}')">
+                    <div class="finding-meta">
+                        <span class="badge risk-${escapeHtml(risk)}">${escapeHtml(risk)}</span>
+                        <span class="badge">${escapeHtml(category)}</span>
+                        <span class="badge">${escapeHtml(status)}</span>
+                    </div>
+                    <div class="finding-sample">${escapeHtml(sample)}</div>
+                    <div class="queue-boxes">${escapeHtml(boxNote)}</div>
+                    ${note}
+                    ${finding ? findingRationaleHtml(finding) : ''}
+                    ${actions}
+                </div>
+            `;
+        }
+
+        function renderReviewQueue() {
+            if (!currentDoc || currentDoc.file_extension !== '.pdf') return;
+            const target = document.getElementById('findingGroups');
+            const grouped = buildReviewQueue();
+            const labels = Object.keys(grouped).sort();
+            target.innerHTML = labels.length
+                ? labels.map((label) => {
+                    const items = grouped[label];
+                    const pending = items.filter((item) => {
+                        const findingPending = item.finding && (item.finding.review_status || 'pending') === 'pending';
+                        const boxPending = item.regions.some((region) => (region.review_status || 'pending') === 'pending');
+                        return findingPending || boxPending;
+                    }).length;
+                    const categories = [...new Set(items.filter((item) => item.finding).map((item) => item.finding.category))];
+                    let bulkHtml = '';
+                    if (categories.length) {
+                        bulkHtml = groupBulkButtonsHtml(pending, categories);
+                    } else if (canReview && pending) {
+                        const regionIds = items.flatMap((item) => item.regions.map((region) => region.id)).join(',');
+                        bulkHtml = `
+                            <div class="group-actions">
+                                <button type="button" onclick="pdfBatchReview({ action: 'approve', region_ids: [${regionIds}], only_pending: true })">Approve all</button>
+                                <button class="danger" type="button" onclick="pdfBatchReview({ action: 'reject', region_ids: [${regionIds}], only_pending: true })">Reject all</button>
+                            </div>
+                        `;
+                    }
+                    return `
+                        <section class="group">
+                            <div class="group-title">
+                                <h3>${escapeHtml(label)}</h3>
+                                <span class="badge">${items.length} · ${pending} pending</span>
+                            </div>
+                            ${bulkHtml}
+                            ${items.map(queueItemHtml).join('')}
+                        </section>
+                    `;
+                }).join('')
+                : '<div class="subtle">No findings or redaction boxes yet. Use Generate Boxes, or draw directly on the page.</div>';
+            highlightQueueItem();
+        }
+
+        function queueLocate(regionIdsCsv) {
+            const ids = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
+            if (ids.length) selectPdfRegion(ids[0], true);
+        }
+
+        function highlightQueueItem() {
+            document.querySelectorAll('.queue-item').forEach((el) => {
+                const ids = (el.dataset.regionIds || '').split(',').map(Number).filter(Boolean);
+                const match = Boolean(pdfSelectedRegionId) && ids.includes(pdfSelectedRegionId);
+                el.classList.toggle('selected', match);
+                if (match) el.scrollIntoView({ block: 'nearest' });
+            });
+        }
+
+        async function queueAction(event, findingId, regionIdsCsv, action) {
+            event.stopPropagation();
+            if (!canReview) return;
+            const regionIds = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
+            if (findingId) {
+                const response = await fetch(`/api/finding/${findingId}/review`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action })
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    showToast(data.error || 'Finding update failed.');
+                    return;
+                }
+            }
+            if (regionIds.length) {
+                const response = await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, region_ids: regionIds, only_pending: false })
+                });
+                if (!response.ok) {
+                    const data = await response.json().catch(() => ({}));
+                    showToast(data.error || 'Box update failed.');
+                    return;
+                }
+            }
+            await reloadDocument();
+            const message = action === 'approve' ? 'Item and linked box(es) approved.' : 'Item and linked box(es) rejected.';
+            if (findingId) {
+                showToast(message, { label: 'Undo', onClick: () => undoFinding(findingId, regionIdsCsv) });
+            } else if (regionIds.length) {
+                showToast(message, {
+                    label: 'Undo',
+                    onClick: async () => {
+                        await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'pending', region_ids: regionIds, only_pending: false })
+                        });
+                        await reloadDocument();
+                        showToast('Decision reverted to pending.');
+                    }
+                });
+            } else {
+                showToast(message);
+            }
+        }
+
+        async function generatePdfRegions() {
+            if (!canReview) return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+            await handleMutation(response, 'PDF boxes generated.');
+        }
+
+        async function pdfRegionAction(regionId, action) {
+            if (!canReview) return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions/${regionId}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+            await handleMutation(response, 'PDF region updated.');
+        }
+
+        async function pdfBatchReview(payload) {
+            if (!canReview) return;
+            if (payload && payload.action === 'reject' && !window.confirm('Reject the selected pending redaction boxes? Rejected boxes will not be blacked out on export.')) return;
+            const response = await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'Batch PDF region action failed.');
+                return;
+            }
+            const data = await response.json();
+            showToast(`${data.updated} box(es) updated.`);
+            await reloadDocument();
+        }
+
+        async function pdfRejectQaWarningBoxes() {
+            if (!pdfLastQaLeakedIds.length) {
+                showToast('No QA-warning boxes recorded. Run PDF QA first.');
+                return;
+            }
+            await pdfBatchReview({ action: 'reject', region_ids: pdfLastQaLeakedIds, only_pending: false });
+        }
+
+        async function addPdfRegion(event) {
+            if (!canReview) return;
+            event.preventDefault();
+            const category = document.getElementById('pdfRegionCategory').value || 'manual_sensitive_text';
+            const payload = {
+                page_number: Number(document.getElementById('pdfRegionPage').value || 1),
+                category,
+                source: 'manual',
+                rect: {
+                    x0: Number(document.getElementById('pdfRegionX0').value),
+                    y0: Number(document.getElementById('pdfRegionY0').value),
+                    x1: Number(document.getElementById('pdfRegionX1').value),
+                    y1: Number(document.getElementById('pdfRegionY1').value)
+                }
+            };
+            const response = await fetch(`/api/document/${docId}/pdf/regions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (response.ok) {
+                ['pdfRegionX0', 'pdfRegionY0', 'pdfRegionX1', 'pdfRegionY1'].forEach((id) => document.getElementById(id).value = '');
+            }
+            await handleMutation(response, 'Manual PDF box added.');
+        }
+
+        async function runPdfQa() {
+            if (!canReview) return;
+            const reportEl = document.getElementById('qaReport');
+            reportEl.innerHTML = '<div class="qa-item">Running PDF export QA...</div>';
+            const response = await fetch(`/api/document/${docId}/redacted-export/qa?format=pdf&style=black_box`);
+            const data = await response.json();
+            if (!response.ok) {
+                reportEl.innerHTML = `<div class="qa-item"><strong>PDF QA blocked</strong>${escapeHtml(data.error || 'Could not run PDF QA.')}</div>`;
+                showToast(data.error || 'Could not run PDF QA.');
+                return;
+            }
+            pdfLastQaLeakedIds = (data.leaked_regions || [])
+                .map((leak) => Number(leak.region_id))
+                .filter((id) => Number.isInteger(id) && id > 0);
+            const rejectQaBtn = document.getElementById('pdfRejectQaBtn');
+            if (rejectQaBtn) {
+                rejectQaBtn.disabled = !pdfLastQaLeakedIds.length;
+                rejectQaBtn.title = pdfLastQaLeakedIds.length
+                    ? `Reject ${pdfLastQaLeakedIds.length} box(es) whose text remained extractable`
+                    : 'No QA-warning boxes in the last QA run';
+            }
+            renderQaReport(data);
+            await reloadDocument();
+        }
+
+        async function addFinding(event) {
+            if (!canReview) return;
+            event.preventDefault();
+            const text = document.getElementById('manualText').value;
+            const category = document.getElementById('manualCategory').value || 'manual_sensitive_text';
+            const replacement = document.getElementById('manualReplacement').value || `[${category.toUpperCase()}_REDACTED]`;
+            const response = await fetch(`/api/document/${docId}/findings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, category, replacement_text: replacement })
+            });
+            if (response.ok) {
+                document.getElementById('manualText').value = '';
+                document.getElementById('manualCategory').value = '';
+                document.getElementById('manualReplacement').value = '';
+            }
+            await handleMutation(response, 'Manual finding added.');
+        }
+
+        async function handleMutation(response, successMessage) {
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showToast(data.error || 'Action failed.');
+                return;
+            }
+            showToast(successMessage);
+            await reloadDocument();
+        }
+
+        function field(label, value) {
+            return `<div class="field"><label>${escapeHtml(label)}</label><div>${escapeHtml(String(value ?? '-'))}</div></div>`;
+        }
+
+        function showToast(message, action) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            if (action) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'toast-action';
+                button.textContent = action.label;
+                button.onclick = () => {
+                    toast.classList.remove('show');
+                    action.onClick();
+                };
+                toast.appendChild(button);
+            }
+            toast.classList.add('show');
+            clearTimeout(window.toastTimer);
+            window.toastTimer = setTimeout(() => toast.classList.remove('show'), action ? 6000 : 2600);
+        }
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.appendChild(document.createTextNode(String(value ?? '')));
+            return div.innerHTML;
+        }
+
+        async function logout() {
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

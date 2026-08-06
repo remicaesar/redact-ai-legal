@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - Redact AI</title>
+    <link rel="stylesheet" href="/static/workstation.css">
+    <style>
+        body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17202a; }
+        header { padding: 22px 28px; background: #fff; border-bottom: 1px solid #d8e0ea; }
+        h1 { margin: 0; font-size: 20px; }
+        h2 { margin: 0 0 10px; font-size: 15px; }
+        .subtitle { margin-top: 4px; color: #667085; font-size: 13px; }
+        .content { display: grid; gap: 14px; padding: 22px 28px; }
+        .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .panel { background: #fff; border: 1px solid #d8e0ea; border-radius: 8px; padding: 14px; }
+        .setting { border: 1px solid #d8e0ea; border-radius: 8px; padding: 12px; background: #fbfcfe; }
+        .setting strong { display: block; margin-bottom: 4px; }
+        .setting span { color: #667085; font-size: 13px; line-height: 1.4; }
+        @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="app-sidebar" aria-label="Workstation navigation">
+            <div class="brand-block">
+                <div class="brand-title">Redact AI</div>
+                <div class="brand-subtitle">Local-first configuration</div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-section-label">Workspace</div>
+                <a class="nav-item" href="/"><span class="nav-icon">D</span>Dashboard</a>
+                <a class="nav-item" href="/matters"><span class="nav-icon">M</span>Matters</a>
+                <a class="nav-item" href="/?review_status=pending_review"><span class="nav-icon">R</span>Review Queue</a>
+                <a class="nav-item" href="/?ocr_status=queued"><span class="nav-icon">O</span>OCR Queue</a>
+            </div>
+            <div class="nav-section">
+                <div class="nav-section-label">Admin</div>
+                <a class="nav-item" href="/audit-log"><span class="nav-icon">A</span>Audit Log</a>
+                <a class="nav-item active" href="/settings"><span class="nav-icon">S</span>Settings</a>
+            </div>
+            <div class="local-only-note" title="All processing, storage, and exports happen on this machine. No document content is sent to any external service.">Local only · data stays on this device</div>
+            <div class="sidebar-footer">
+                <div class="user-role">{{ current_user.username }} · {{ current_user.role }}</div>
+                <button class="logout-button" type="button" onclick="logout()">Log out</button>
+            </div>
+        </nav>
+        <div class="shell-main">
+            <div class="shell-banner">
+                <strong>Terminology guardrail</strong>
+                <div class="trust-strip"><span class="trust-pill">Redacted</span><span class="trust-pill">De-identified</span><span class="trust-pill">Privacy-reviewed</span></div>
+            </div>
+            <header>
+                <h1>Settings</h1>
+                <div class="subtitle">{{ positioning }}</div>
+            </header>
+            <main class="content">
+                <section class="panel">
+                    <h2>Access Model</h2>
+                    <div class="grid">
+                        <div class="setting"><strong>Viewer</strong><span>Read-only dashboard and Studio access. No review, OCR mutation, export, audit, or mapping access.</span></div>
+                        <div class="setting"><strong>Reviewer</strong><span>Finding review, OCR acceptance/rejection, manual findings, DOCX QA, and reviewed DOCX export.</span></div>
+                        <div class="setting"><strong>Admin</strong><span>Reviewer permissions plus audit log, restricted mapping checks, and local configuration.</span></div>
+                    </div>
+                </section>
+                <section class="panel">
+                    <h2>Output Terminology</h2>
+                    <div class="grid">
+                        {% for key, term in terminology.items() %}
+                        <div class="setting"><strong>{{ term.label }}</strong><span>{{ term.description }}</span></div>
+                        {% endfor %}
+                    </div>
+                </section>
+                <section class="panel">
+                    <h2>Current Format Support</h2>
+                    <div class="grid">
+                        <div class="setting"><strong>DOCX</strong><span>Reviewed native redaction, placeholder/mask styles, and DOCX export QA.</span></div>
+                        <div class="setting"><strong>PDF / UDF / Images</strong><span>Extraction, OCR/review queue, and lower-assurance preview only until native redaction engines are validated.</span></div>
+                        <div class="setting"><strong>External LLM</strong><span>Blocked unless extraction, risk, critical findings, redaction completion, and human review gates pass.</span></div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+    <script>
+        async function logout() {
+            await fetch('/logout', { method: 'POST' });
+            window.location.href = '/login';
+        }
+    </script>
+</body>
+</html>

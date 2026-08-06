@@ -1,0 +1,2 @@
+"""Legal document analyzer package."""
+

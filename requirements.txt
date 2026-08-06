@@ -1,0 +1,4 @@
+Flask>=3.0,<4
+PyMuPDF>=1.24,<2
+pypdf>=4.0,<6
+python-dotenv>=1.0,<2

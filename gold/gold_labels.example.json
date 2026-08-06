@@ -1,0 +1,711 @@
+{
+  "note": "Synthetic Turkish legal mini-gold set: 17 labeled documents covering criminal, civil, commercial, enforcement, employment, medical, OCR-noisy, notary, KVKK, lease, and corporate documents, plus three bare-name documents where person names appear WITHOUT a title or party-role prefix (running text, attendee/witness lists, signature blocks).",
+  "documents": [
+    {
+      "id": "synthetic_pleading",
+      "path": "../tests/fixtures/sample_pleading.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Ayse Demir",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "ayse.demir@example.com",
+          "required": true
+        },
+        {
+          "category": "phone_number",
+          "text": "0532 111 22 33",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Soruşturma No: 2026/123",
+          "required": true
+        },
+        {
+          "category": "criminal_allegation",
+          "text": "Şüpheli hakkında suç duyurusu",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "synthetic_commercial_case",
+      "path": "../tests/fixtures/sample_commercial_case.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "tax_number",
+          "text": "VKN: 1234567890",
+          "required": true
+        },
+        {
+          "category": "mersis_number",
+          "text": "0123456789012345",
+          "required": true
+        },
+        {
+          "category": "bar_registration_number",
+          "text": "Sicil No: 45678",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "4. Asliye Ticaret Mahkemesi",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "Yargıtay",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Esas No: 2026/431",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "UYAP No: 2026/9981",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Mehmet Kaya",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "YILMAZ İNŞAAT ANONİM ŞİRKETİ",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Caddesi Merkez Apartmanı",
+          "required": true
+        }
+      ],
+      "ocr_text": "İstanbul Anadolu 4. Asliye Ticaret Mahkemesi Esas No: 2026/431 Davacı YILMAZ İNŞAAT ANONİM ŞİRKETİ (VKN: 1234567890, MERSİS No: 0123456789012345) vekili Av. Mehmet Kaya (Baro Sicil No: 45678) tarafından sunulmuştur. Davalı tanık beyanlarına göre Cumhuriyet Caddesi Merkez Apartmanı No: 12 Kadıköy adresindedir. Yargıtay 11. Hukuk Dairesi içtihadı ve UYAP No: 2026/9981 kaydı."
+    },
+    {
+      "id": "criminal_investigation",
+      "path": "../tests/fixtures/criminal_investigation.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "turkish_national_id",
+          "text": "20433218148",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Fatma Yıldız",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Kemal Arslan",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Soruşturma No: 2026/815",
+          "required": true
+        },
+        {
+          "category": "phone_number",
+          "text": "0533 444 55 66",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "fatma.yildiz@example.com",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Bağdat Caddesi No: 41",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "Cumhuriyet Başsavcılığı",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "3. Sulh Ceza Hakimliği",
+          "required": true
+        },
+        {
+          "category": "criminal_allegation",
+          "text": "Şüpheli Kemal Arslan hakkında nitelikli dolandırıcılık",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "civil_petition",
+      "path": "../tests/fixtures/civil_petition.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "turkish_national_id",
+          "text": "70013389034",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Elif Şahin",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Zeynep Koç",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Murat Şahin",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "11. Aile Mahkemesi",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "250.000 TL",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Birlik Mahallesi 45. Sokak No: 8",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "commercial_contract",
+      "path": "../tests/fixtures/commercial_contract.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "company_name",
+          "text": "DEMİR YAZILIM ANONİM ŞİRKETİ",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "KARTAL LOJİSTİK LİMİTED ŞİRKETİ",
+          "required": true
+        },
+        {
+          "category": "tax_number",
+          "text": "VKN: 1462704828",
+          "required": true
+        },
+        {
+          "category": "mersis_number",
+          "text": "0123456789012345",
+          "required": true
+        },
+        {
+          "category": "iban",
+          "text": "TR33 0006 1005 1978 6457 8413 26",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "85.000 TL",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "satinalma@demiryazilim.example.com",
+          "required": true
+        },
+        {
+          "category": "phone_number",
+          "text": "0212 345 67 89",
+          "required": true
+        },
+        {
+          "category": "privileged_or_confidential",
+          "text": "ticari sır",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "court_judgment",
+      "path": "../tests/fixtures/court_judgment.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "court_or_authority",
+          "text": "Yargıtay 9. Hukuk Dairesi",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "7. İş Mahkemesi",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Esas No: 2025/4411",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Karar No: 2026/1287",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Hasan Demirci",
+          "required": true
+        },
+        {
+          "category": "date",
+          "text": "14.02.2026",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "enforcement_file",
+      "path": "../tests/fixtures/enforcement_file.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "court_or_authority",
+          "text": "12. İcra Müdürlüğü",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Takip No: 2026/45678",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Selin Aydın",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Osman Kılıç",
+          "required": true
+        },
+        {
+          "category": "turkish_national_id",
+          "text": "93863794032",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "Verdi Faktoring A.Ş.",
+          "required": true
+        },
+        {
+          "category": "iban",
+          "text": "TR12 0001 0002 3456 7890 1234 56",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "142.500 TL",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Etlik Mahallesi Güven Sokak No: 3",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "employment_dispute",
+      "path": "../tests/fixtures/employment_dispute.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "court_or_authority",
+          "text": "3. İş Mahkemesi",
+          "required": true
+        },
+        {
+          "category": "turkish_national_id",
+          "text": "36542351188",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Deniz Aksoy",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "EGE TEKSTİL SANAYİ A.Ş.",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "42.000 TL",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "deniz.aksoy@example.com",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "medical_case",
+      "path": "../tests/fixtures/medical_case.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "court_or_authority",
+          "text": "5. Asliye Hukuk Mahkemesi",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Esas No: 2026/902",
+          "required": true
+        },
+        {
+          "category": "turkish_national_id",
+          "text": "71559407862",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Leyla Kaya",
+          "required": true
+        },
+        {
+          "category": "health_data",
+          "text": "cerrahi operasyon",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "ocr_scan_noisy",
+      "path": "../tests/fixtures/ocr_scan_noisy.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "turkish_national_id",
+          "text": "26184959330",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Sorusturma No : 2026 / 3377",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Ridvan Celik",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Burak Sen",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "CUMHURIYET BASSAVCILIGI",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Alsancak Mahallesi 1475 Sokak",
+          "required": true
+        },
+        {
+          "category": "criminal_allegation",
+          "text": "sahtecilik iddiasi",
+          "required": true
+        }
+      ],
+      "ocr_text": "IZMIR CUMHURIYET BASSAVCILIGI\nSorusturma No : 2026 / 3377\n\nSupheli Ridvan Celik ( TCKN : 26184959330 ) hakkinda sahtecilik iddiasi ile islem yapilmistir.\nMuvekkil sirketi temsilen Av . Burak Sen basvuruda bulunmustur .\nAdres : Alsancak Mahallesi 1475 Sokak No : 21 Konak\n"
+    },
+    {
+      "id": "power_of_attorney",
+      "path": "../tests/fixtures/power_of_attorney.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "court_or_authority",
+          "text": "24. Noterliği",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Yevmiye No: 2026/18821",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Cemile Doğan",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Emre Yalçın",
+          "required": true
+        },
+        {
+          "category": "bar_registration_number",
+          "text": "Sicil No: 78901",
+          "required": true
+        },
+        {
+          "category": "turkish_national_id",
+          "text": "20341316448",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "kvkk_request",
+      "path": "../tests/fixtures/kvkk_request.txt",
+      "expected_residual_risk": "High",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Hakan Öztürk",
+          "required": true
+        },
+        {
+          "category": "turkish_national_id",
+          "text": "85255341924",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "hakan.ozturk@example.com",
+          "required": true
+        },
+        {
+          "category": "phone_number",
+          "text": "0505 987 65 43",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Moda Caddesi Deniz Apartmanı No: 15",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "lease_agreement",
+      "path": "../tests/fixtures/lease_agreement.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Nurten Acar",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Barış Tunç",
+          "required": true
+        },
+        {
+          "category": "address",
+          "text": "Fenerbahçe Mahallesi",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "55.000 TL",
+          "required": true
+        },
+        {
+          "category": "iban",
+          "text": "TR98 0011 1000 0000 5555 4444 33",
+          "required": true
+        },
+        {
+          "category": "date",
+          "text": "01.08.2026",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "corporate_resolution",
+      "path": "../tests/fixtures/corporate_resolution.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "case_or_investigation_number",
+          "text": "Karar No: 2026/07",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "TUNA GIDA SANAYİ VE TİCARET ANONİM ŞİRKETİ",
+          "required": true
+        },
+        {
+          "category": "mersis_number",
+          "text": "0462704828000015",
+          "required": true
+        },
+        {
+          "category": "tax_number",
+          "text": "Vergi Kimlik No: 0983930103",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Aylin Kurt",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "Ticaret Sicili Müdürlüğü",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bare_names_contract",
+      "path": "../tests/fixtures/bare_names_contract.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Mehmet Yılmaz",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Ayşe Kaya",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Kemal Öztürk",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Zeynep Arslan",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Hüseyin Doğan",
+          "required": true
+        },
+        {
+          "category": "company_name",
+          "text": "ORNEK TEKNOLOJİ ANONİM ŞİRKETİ",
+          "required": true
+        },
+        {
+          "category": "email_address",
+          "text": "sozlesme@example.com",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "1.250.000 TL",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bare_names_hearing_minutes",
+      "path": "../tests/fixtures/bare_names_hearing_minutes.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Selçuk Aydın",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Elif Korkmaz",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Ahmet Demir",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Fatma Şahin",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Mustafa Çelik",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Kemal Öztürk",
+          "required": true
+        },
+        {
+          "category": "court_or_authority",
+          "text": "ANKARA 7. ASLİYE HUKUK MAHKEMESİ",
+          "required": true
+        },
+        {
+          "category": "case_or_investigation_number",
+          "text": "Esas No: 2025/418",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bare_names_expert_report",
+      "path": "../tests/fixtures/bare_names_expert_report.txt",
+      "expected_residual_risk": "Medium",
+      "labels": [
+        {
+          "category": "natural_person_name",
+          "text": "Kemal Öztürk",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Ali Vural",
+          "required": true
+        },
+        {
+          "category": "natural_person_name",
+          "text": "Emine Yıldız",
+          "required": true
+        },
+        {
+          "category": "money_amount",
+          "text": "84.500 TL",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

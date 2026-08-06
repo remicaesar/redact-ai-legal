@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "Copy to clients.local.json and replace with your own roster.",
+    "clients.local.json is gitignored: a real client roster is confidential",
+    "and must never be committed. Override the path with LEGAL_ANALYZER_CLIENTS_FILE.",
+    "'aliases' are matched case-insensitively against filename + first 3000 chars."
+  ],
+  "clients": [
+    {
+      "name": "Acme Corp",
+      "aliases": [
+        "ACME CORP",
+        "Acme_",
+        "ACME HOLDINGS LIMITED"
+      ]
+    },
+    {
+      "name": "Northwind",
+      "aliases": [
+        "Northwind_",
+        "Northwind -",
+        "NORTHWIND TRADING"
+      ]
+    },
+    {
+      "name": "Örnek Teknoloji",
+      "aliases": [
+        "ORNEK TEKNOLOJI",
+        "Örnek_",
+        "ÖRNEK TEKNOLOJİ A.Ş."
+      ]
+    }
+  ]
+}
