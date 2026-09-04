@@ -232,6 +232,22 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at TIMESTAMP
 );
 
+-- Failed-login records backing the /login throttle. Mirrors
+-- db/migrations/005_login_throttle.sql, which brings existing databases
+-- forward; this copy is what a fresh database is built from.
+--
+-- Operational state, not evidence: rows are deleted once they age out of the
+-- window or the user signs in. audit_log keeps the permanent record.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    remote_addr TEXT NOT NULL DEFAULT '',
+    attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_attempts_pair ON login_attempts(username, remote_addr, attempted_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_addr ON login_attempts(remote_addr, attempted_at);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER,

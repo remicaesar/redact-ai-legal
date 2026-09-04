@@ -21,6 +21,7 @@ if __name__ == "__main__":
 import json
 import hashlib
 import os
+import secrets
 import sqlite3
 import time
 from functools import wraps
@@ -56,8 +57,44 @@ UPLOAD_DIR = PROJECT_DIR / "data" / "uploads"
 EXPORT_DIR = PROJECT_DIR / "data" / "exports"
 READY_DB_PATHS: set[Path] = set()
 
+def resolve_secret_key() -> str:
+    """Return the session signing key, without a hardcoded fallback.
+
+    The key that signs the session cookie is the only thing between a stranger
+    and an admin session, so a default committed to a public repository is a
+    published credential, not a convenience. Without LEGAL_ANALYZER_SECRET_KEY
+    each process generates its own ephemeral key: sessions then do not survive a
+    restart and do not work across workers. Both are loud, local failures, which
+    is the safe direction for a key guarding document access — and setting the
+    env var fixes both.
+    """
+    configured = os.environ.get("LEGAL_ANALYZER_SECRET_KEY", "").strip()
+    if configured:
+        return configured
+    print(
+        "WARNING: LEGAL_ANALYZER_SECRET_KEY is not set. Using an ephemeral key — "
+        "sessions will not survive a restart and will not work across workers. "
+        "Set it before serving this app to anyone but yourself.",
+        file=sys.stderr,
+    )
+    return secrets.token_hex(32)
+
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("LEGAL_ANALYZER_SECRET_KEY", "local-dev-secret-change-before-production")
+app.secret_key = resolve_secret_key()
+
+# Cap request bodies at the ceiling the ZIP extractor already enforces
+# (ZIP_MAX_TOTAL_BYTES), so an upload cannot claim more disk than extraction is
+# willing to read back. Werkzeug aborts with 413 past this.
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("LEGAL_ANALYZER_MAX_UPLOAD_BYTES", "100000000"))
+
+# Session cookie hardening. Secure is opt-in rather than on by default because
+# the documented local setup is plain http on 127.0.0.1, where a Secure cookie
+# is never sent and login would fail with no visible reason. Any deployment
+# behind TLS should set LEGAL_ANALYZER_HTTPS=1.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("LEGAL_ANALYZER_HTTPS", "").strip().lower() in {"1", "true", "yes"}
 
 
 def get_db() -> sqlite3.Connection:
@@ -97,6 +134,141 @@ def bootstrap_admin_from_env(conn: sqlite3.Connection) -> None:
         (username, generate_password_hash(password)),
     )
     conn.commit()
+
+
+CSRF_HEADER = "X-CSRF-Token"
+CSRF_FIELD = "csrf_token"
+# Methods that must not change state, so they carry no token requirement. A
+# handler that mutates on GET would sit outside this protection entirely.
+CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+FORM_MIMETYPES = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+
+
+def issue_csrf_token() -> str:
+    """Return this session's CSRF token, minting one on first use.
+
+    Registered as a Jinja global so templates can emit it, and called on login
+    so the token rotates when the session's privilege level changes.
+    """
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def submitted_csrf_token() -> str:
+    """The token the caller presented, from the header or a form field."""
+    header = (request.headers.get(CSRF_HEADER) or "").strip()
+    if header:
+        return header
+    # Only touch request.form for form-encoded bodies. Reading it on a JSON
+    # request is harmless but pointless, and the API is JSON everywhere except
+    # the login form.
+    if request.mimetype in FORM_MIMETYPES:
+        return (request.form.get(CSRF_FIELD) or "").strip()
+    return ""
+
+
+@app.before_request
+def csrf_protect():
+    """Reject state-changing requests that do not carry the session's token.
+
+    SameSite=Lax already blocks the common cross-site POST, but it is a browser
+    default, not a property of this app: it does nothing for an older browser,
+    and nothing for a sibling subdomain that can write the cookie. The token is
+    the check that does not depend on either.
+
+    Deliberately not audited. This runs before authentication on every request,
+    so writing a row here would let an unauthenticated caller drive database
+    writes by sending bad tokens in a loop. A rejected request has changed
+    nothing, which is the thing worth knowing.
+    """
+    if not app.config.get("CSRF_PROTECTION", True):
+        return None
+    if request.method in CSRF_SAFE_METHODS:
+        return None
+
+    expected = session.get("csrf_token") or ""
+    submitted = submitted_csrf_token()
+    if expected and submitted and secrets.compare_digest(expected, submitted):
+        return None
+
+    message = "CSRF token missing or invalid. Reload the page and try again."
+    if request.is_json or request.path.startswith("/api/"):
+        return jsonify({"error": message}), 403
+    return message, 403
+
+
+app.jinja_env.globals["csrf_token"] = issue_csrf_token
+
+
+def login_throttle_limits() -> tuple[int, int, int]:
+    """(per-pair cap, per-address cap, window seconds), all env-overridable."""
+    return (
+        int(os.environ.get("LEGAL_ANALYZER_LOGIN_MAX_ATTEMPTS", "5")),
+        int(os.environ.get("LEGAL_ANALYZER_LOGIN_MAX_ATTEMPTS_PER_ADDR", "20")),
+        int(os.environ.get("LEGAL_ANALYZER_LOGIN_WINDOW_SECONDS", "900")),
+    )
+
+
+def record_failed_login(conn: sqlite3.Connection, username: str, remote_addr: str) -> None:
+    conn.execute(
+        "INSERT INTO login_attempts (username, remote_addr) VALUES (?, ?)",
+        (username, remote_addr or ""),
+    )
+
+
+def clear_login_attempts(conn: sqlite3.Connection, username: str, remote_addr: str) -> None:
+    """Drop a caller's failures once they prove they know the password."""
+    conn.execute(
+        "DELETE FROM login_attempts WHERE username = ? AND remote_addr = ?",
+        (username, remote_addr or ""),
+    )
+
+
+def login_lockout_seconds(conn: sqlite3.Connection, username: str, remote_addr: str) -> int:
+    """Seconds until this caller may try again; 0 when they are not locked out.
+
+    Counted per (username, address) rather than per username alone, so someone
+    who knows a username cannot lock its owner out from somewhere else. The
+    per-address cap is the second half of that trade: it stops one address
+    spraying one attempt each across many usernames and never tripping the
+    pair limit.
+
+    remote_addr is whatever the WSGI layer reports. Behind a reverse proxy that
+    is the proxy unless it is configured to pass the client through, in which
+    case every caller shares one bucket -- size the per-address cap for that.
+    """
+    pair_cap, addr_cap, window = login_throttle_limits()
+    offset = f"-{window} seconds"
+    conn.execute("DELETE FROM login_attempts WHERE attempted_at < datetime('now', ?)", (offset,))
+
+    remaining = 0
+    for sql, params, cap in (
+        (
+            "SELECT COUNT(*), MIN(attempted_at) FROM login_attempts "
+            "WHERE username = ? AND remote_addr = ? AND attempted_at >= datetime('now', ?)",
+            (username, remote_addr or "", offset),
+            pair_cap,
+        ),
+        (
+            "SELECT COUNT(*), MIN(attempted_at) FROM login_attempts "
+            "WHERE remote_addr = ? AND attempted_at >= datetime('now', ?)",
+            (remote_addr or "", offset),
+            addr_cap,
+        ),
+    ):
+        count, first_attempt = conn.execute(sql, params).fetchone()
+        if count < cap or not first_attempt:
+            continue
+        elapsed = conn.execute(
+            "SELECT CAST(strftime('%s','now') AS INTEGER) - CAST(strftime('%s', ?) AS INTEGER)",
+            (first_attempt,),
+        ).fetchone()[0]
+        remaining = max(remaining, window - int(elapsed))
+
+    return max(remaining, 0)
 
 
 @app.before_request
@@ -907,7 +1079,14 @@ app.register_blueprint(export_bp)
 if __name__ == "__main__":
     if not DB_PATH.exists():
         raise SystemExit("Database not found. Run: python3 db/init_db.py && python3 classify.py")
+    # debug is opt-in. The Werkzeug debugger executes arbitrary code from the
+    # browser on any traceback, so having it on by default in the command the
+    # README tells people to run puts an RCE console in front of a database of
+    # privileged documents. LEGAL_ANALYZER_DEBUG=1 turns it back on locally.
+    debug = os.environ.get("LEGAL_ANALYZER_DEBUG", "").strip().lower() in {"1", "true", "yes"}
     # threaded=True: serve requests concurrently so a slow OCR/PDF-export
     # request no longer freezes the whole app. (`flask run` is already
     # threaded by default; this covers the `python3 app.py` script path.)
-    app.run(debug=True, port=5000, threaded=True)
+    # host stays on loopback: this server is single-process and unhardened,
+    # and `wsgi.py` behind gunicorn is the supported way to serve it elsewhere.
+    app.run(host="127.0.0.1", port=5000, debug=debug, threaded=True)

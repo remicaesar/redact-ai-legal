@@ -47,6 +47,9 @@ FEATURES = [
     },
 ]
 
+# Rendered after "Built for", not "Privacy teams use Redact AI for". The latter
+# is a customer claim, and there are no customers; the use cases are what the
+# workflow is designed to handle, which is a claim the repo can actually back.
 ROTATING_WORDS = [
     "discovery productions",
     "client intake files",

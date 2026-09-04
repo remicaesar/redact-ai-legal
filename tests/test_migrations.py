@@ -33,7 +33,16 @@ class MigrationTests(unittest.TestCase):
             first = apply_migrations(db_path)
             second = apply_migrations(db_path)
 
-        self.assertEqual(first, ["001_foundation_tables", "002_matter_artifacts", "003_pdf_redaction_regions", "004_ocr_tokens"])
+        self.assertEqual(
+            first,
+            [
+                "001_foundation_tables",
+                "002_matter_artifacts",
+                "003_pdf_redaction_regions",
+                "004_ocr_tokens",
+                "005_login_throttle",
+            ],
+        )
         self.assertEqual(second, [])
 
     def test_existing_database_upgrades_without_data_loss(self):

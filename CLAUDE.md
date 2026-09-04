@@ -33,10 +33,12 @@ Tests use `unittest`, not pytest (no pytest in `requirements.txt`). Each test fi
 ```bash
 python3 -m unittest tests.test_app_workflow
 python3 -m unittest tests.test_app_workflow.AppWorkflowTests.test_some_method   # single test
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -t .
 ```
 
 Tests generally build fixtures in-memory or under a `TemporaryDirectory` and construct a fresh SQLite DB per test (see `tests/test_app_workflow.py`) rather than touching `db/legal_documents.db`.
+
+The `-t .` on the discover command is load-bearing. It makes `tests` import as a package, which runs `tests/__init__.py` — that file points `app.test_client_class` at a client which carries the session CSRF token. Without it the package is skipped, every state-changing request in the suite arrives with no token, and ~58 tests fail with 403. CSRF protection is deliberately *not* disabled under test: `tests/test_csrf.py` uses a raw `FlaskClient` to prove the check still rejects. Anything that calls `reload(app_module)` must re-run `install_csrf_client()` afterwards, since the reload builds a new Flask object with the default client (see `reload_app()` in `tests/test_app_hardening.py`).
 
 ## Accuracy and benchmark tooling
 
@@ -53,7 +55,7 @@ python3 benchmark.py --api-iterations 1000 --api-concurrency 50    # local concu
 
 ## Architecture
 
-**`app.py`** (~120K, single-file Flask app) is the HTTP layer: routes, session-based auth/RBAC (`admin`/`reviewer`/`viewer`), audit logging, and orchestration of the modules below. It does not contain detection/extraction/redaction logic itself — it calls into `legal_analyzer/*` and `classify.py`.
+**`app.py`** (~950 lines) is the shared core: the Flask app object and its config, DB access, session-based auth/RBAC (`admin`/`reviewer`/`viewer`), audit logging, document persistence helpers, and the release-gate refresh. HTTP routes live in `blueprints/` and import these helpers. It does not contain detection/extraction/redaction logic itself — it calls into `legal_analyzer/*` and `classify.py`.
 
 **`legal_analyzer/`** — the core domain logic, split by concern:
 - `taxonomy.py` — category/subcategory vocabulary, supported file extensions, terminology definitions (redaction vs. pseudonymization vs. de-identification vs. anonymization). Other modules import from here rather than hardcoding categories.

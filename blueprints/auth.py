@@ -5,7 +5,15 @@ from __future__ import annotations
 from flask import Blueprint, g, jsonify, redirect, render_template_string, request, session, url_for
 from werkzeug.security import check_password_hash
 
-from app import audit_event, get_db, require_roles
+from app import (
+    audit_event,
+    clear_login_attempts,
+    get_db,
+    issue_csrf_token,
+    login_lockout_seconds,
+    record_failed_login,
+    require_roles,
+)
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -66,8 +74,11 @@ LOGIN_PAGE = """
                     <div class="sub">Privacy review workstation</div>
                 </div>
             </div>
-            {% if error %}<div class="error">Invalid username or password.</div>{% endif %}
+            {% if throttled %}
+            <div class="error">Too many failed sign-in attempts. Wait a few minutes and try again.</div>
+            {% elif error %}<div class="error">Invalid username or password.</div>{% endif %}
             <form method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <label for="username">Username</label>
                 <input id="username" name="username" autocomplete="username" autofocus>
                 <label for="password">Password</label>
@@ -84,14 +95,35 @@ LOGIN_PAGE = """
 @auth_bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
-        return render_template_string(LOGIN_PAGE, error=False)
+        # Minting the token here is what lets the form below post it back; a
+        # POST that arrives without a prior GET has no session token to match.
+        issue_csrf_token()
+        return render_template_string(LOGIN_PAGE, error=False, throttled=False)
 
     payload = request.get_json(silent=True) or request.form
     username = (payload.get("username") or "").strip()
     password = payload.get("password") or ""
+    remote_addr = request.remote_addr or ""
     conn = get_db()
+
+    # Throttle before touching the password hash: check_password_hash is
+    # deliberately slow, so an unthrottled endpoint is both a guessing oracle
+    # and a way to spend the server's CPU.
+    locked_for = login_lockout_seconds(conn, username, remote_addr)
+    if locked_for > 0:
+        audit_event(conn, "login", result="throttled", metadata={"username": username})
+        conn.commit()
+        conn.close()
+        retry_after = str(locked_for)
+        if request.is_json:
+            response = jsonify({"error": "Too many failed sign-in attempts. Try again later."})
+            response.headers["Retry-After"] = retry_after
+            return response, 429
+        return render_template_string(LOGIN_PAGE, error=True, throttled=True), 429, {"Retry-After": retry_after}
+
     user = conn.execute("SELECT * FROM users WHERE username = ? AND active = 1", (username,)).fetchone()
     if not user or not check_password_hash(user["password_hash"], password):
+        record_failed_login(conn, username, remote_addr)
         audit_event(conn, "login", result="failed", metadata={"username": username})
         conn.commit()
         conn.close()
@@ -99,7 +131,11 @@ def login():
             return jsonify({"error": "Invalid credentials"}), 401
         return render_template_string(LOGIN_PAGE, error=True), 401
 
+    clear_login_attempts(conn, username, remote_addr)
     session.clear()
+    # session.clear() drops the pre-login CSRF token; mint a fresh one rather
+    # than carrying the anonymous session's token into an authenticated one.
+    issue_csrf_token()
     session["user_id"] = user["id"]
     session["username"] = user["username"]
     session["role"] = user["role"]

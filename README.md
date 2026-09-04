@@ -21,6 +21,48 @@ Open `http://127.0.0.1:5000`.
 
 The first local admin is created from `LEGAL_ANALYZER_ADMIN_USERNAME` and `LEGAL_ANALYZER_ADMIN_PASSWORD`; the username defaults to `admin` when only the password is set.
 
+## Running It Beyond Your Own Machine
+
+`python3 app.py` is Flask's development server: one process, no restart supervision, and written for localhost. Anything longer-lived goes through the WSGI entry point instead:
+
+```bash
+pip install gunicorn
+export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export LEGAL_ANALYZER_HTTPS=1
+gunicorn --workers 4 --bind 127.0.0.1:5000 wsgi:application
+```
+
+Configuration that matters here, all read from the environment (see `.env.example`):
+
+- `LEGAL_ANALYZER_SECRET_KEY` — signs the session cookie. **There is no hardcoded fallback.** Unset, each process generates its own ephemeral key, so sessions break on restart and across workers. Set it.
+- `LEGAL_ANALYZER_HTTPS=1` — adds the `Secure` flag to the session cookie. Leave unset for plain http on loopback, where a `Secure` cookie is never sent and login fails silently.
+- `LEGAL_ANALYZER_MAX_UPLOAD_BYTES` — request body cap, default 100 MB (the ceiling the ZIP extractor already enforces). Over it, the server returns 413.
+- `LEGAL_ANALYZER_DEBUG=1` — re-enables the Werkzeug debugger on the dev server. Off by default because that debugger executes arbitrary code from the browser on any traceback.
+
+Session cookies are `HttpOnly` and `SameSite=Lax` in all configurations.
+
+### CSRF protection
+
+Every state-changing request (anything but `GET`/`HEAD`/`OPTIONS`/`TRACE`) must carry the session's CSRF token, either as an `X-CSRF-Token` header or a `csrf_token` form field. Pages get the token from a `<meta name="csrf-token">` tag; `static/csrf.js` wraps `fetch` so same-origin writes carry it without each call site opting in. The token rotates when a session logs in.
+
+An API client obtains a token by issuing a `GET` first (for example `GET /login`) and reading it from the session, then sending it as the header on subsequent writes. Requests without a valid token get `403`.
+
+### Login throttling
+
+Failed sign-ins are recorded in `login_attempts` and throttled per `(username, address)` and per address:
+
+- `LEGAL_ANALYZER_LOGIN_MAX_ATTEMPTS` — failures per username+address before lockout, default 5.
+- `LEGAL_ANALYZER_LOGIN_MAX_ATTEMPTS_PER_ADDR` — failures per address across all usernames, default 20. This is what stops one address trying a single password against many accounts.
+- `LEGAL_ANALYZER_LOGIN_WINDOW_SECONDS` — rolling window, default 900.
+
+While locked out the endpoint returns `429` with a `Retry-After` header, and the correct password does not bypass it. A successful sign-in clears that caller's record. Counting per username *and* address is deliberate: counting by username alone would let anyone lock a known user out of their own account.
+
+Behind a reverse proxy, `remote_addr` is the proxy unless it is configured to pass the client address through — in that case every caller shares one bucket, so size the per-address cap accordingly.
+
+### What this deployment is and is not
+
+This is single-tenant software. **Every authenticated user can see every document** — there is no per-user or per-organisation scoping in the schema — so an install serves one firm, on a network you control, behind TLS. It is not multi-tenant and should not be exposed to the public internet or shared between organisations.
+
 ## Migrations and Local Access Control
 
 Existing databases should be upgraded with:
@@ -70,7 +112,7 @@ Speed does not prove privacy quality. Run the mini-gold accuracy audit with manu
 python3 accuracy_audit.py --labels gold/gold_labels.example.json
 ```
 
-The bundled synthetic gold set covers 14 labeled documents (97 required labels): criminal investigation, civil petition, commercial contract, court judgment, enforcement file, employment dispute, medical malpractice, OCR-degraded scan text, notary power of attorney, KVKK data-subject request, lease agreement, and corporate resolution. Against this set the detector currently holds recall 1.0, `false_low_count = 0`, and `risk_shortfall_count = 0` (including post-OCR passes). For a production-quality audit, replace or extend it with manually labeled real documents — synthetic fixtures validate the rules, not real-world layout and language variance. Track recall, precision, false negatives, and especially `false_low_count` and `risk_shortfall_count`.
+The bundled synthetic gold set covers 17 labeled documents (117 required labels): criminal investigation, civil petition, commercial contract, court judgment, enforcement file, employment dispute, medical malpractice, OCR-degraded scan text, notary power of attorney, KVKK data-subject request, lease agreement, and corporate resolution, plus three documents where person names appear with no title or party-role prefix (running text, attendee lists, signature blocks). Against this set the detector currently holds recall 1.0, precision 0.701, `false_low_count = 0`, and `risk_shortfall_count = 0` (including post-OCR passes). For a production-quality audit, replace or extend it with manually labeled real documents — synthetic fixtures validate the rules, not real-world layout and language variance. Track recall, precision, false negatives, and especially `false_low_count` and `risk_shortfall_count`.
 
 `false_low_count` only fires when the computed residual risk is exactly `Low`; it cannot see a document whose gold-expected risk is High but computes Medium. `risk_shortfall_count` closes that gap — it fires whenever the computed risk level is ranked below the gold-expected level (Low < Medium < High), regardless of which two levels are involved, and does not fire on over-reporting (e.g. expected Medium, computed High). Both must be 0.
 

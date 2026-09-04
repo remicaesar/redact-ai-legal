@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t .
+
+      # The accuracy audit is not a unit test and does not fail on its own exit
+      # code, so the gate is asserted here instead. Both counts must be 0:
+      # false_low_count only fires when computed risk is exactly Low, so a
+      # document expected High that computes Medium is invisible to it —
+      # risk_shortfall_count is what catches a downgrade between any two levels.
+      # Recall is asserted too, because a rule that stops detecting a category
+      # entirely can leave both counts at 0.
+      - name: Accuracy audit gate
+        run: |
+          python accuracy_audit.py --labels gold/gold_labels.example.json
+          python - <<'PY'
+          import json, sys
+
+          report = json.load(open("accuracy_report.json"))
+          metrics = report["metrics"]
+          failures = []
+
+          for name in ("false_low_count", "risk_shortfall_count"):
+              if name not in metrics:
+                  failures.append(f"{name} missing from the report — the gate is not being computed")
+              elif metrics[name] != 0:
+                  failures.append(f"{name} is {metrics[name]}, must be 0")
+
+          if metrics.get("false_negative_count", -1) != 0:
+              failures.append(f"false_negative_count is {metrics.get('false_negative_count')}, must be 0")
+
+          post_ocr = metrics.get("post_ocr") or {}
+          for name in ("false_low_count", "risk_shortfall_count"):
+              if post_ocr.get(name, 0) != 0:
+                  failures.append(f"post_ocr {name} is {post_ocr[name]}, must be 0")
+
+          print(
+              f"recall={metrics.get('recall')} precision={metrics.get('precision')} "
+              f"labels={metrics.get('total_gold_labels')} "
+              f"false_low={metrics.get('false_low_count')} "
+              f"risk_shortfall={metrics.get('risk_shortfall_count')}"
+          )
+
+          if failures:
+              print("\nAccuracy gate failed:", file=sys.stderr)
+              for line in failures:
+                  print(f"  - {line}", file=sys.stderr)
+              sys.exit(1)
+
+          print("Accuracy gate passed.")
+          PY
+
+      # The gold set is 17 synthetic documents. Green here means the rules still
+      # do what they did, not that the detector is accurate on real filings.
+      - name: Note on what this proves
+        if: success()
+        run: echo "Gold set is synthetic — this gate guards against regression, not a production accuracy claim."
