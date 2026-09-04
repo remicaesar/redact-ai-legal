@@ -1418,6 +1418,16 @@
             text-align: center;
         }
         .studio-failure { border-style: solid; border-color: #e3b5b2; background: var(--color-danger-soft); color: var(--color-danger); }
+        .studio-truncation-banner {
+            margin: 0 0 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--color-warning);
+            border-radius: var(--radius);
+            background: var(--color-warning-soft);
+            color: var(--color-text);
+            font-size: 11.5px;
+            line-height: 1.5;
+        }
         .toast { z-index: 200; }
 
         @media (max-width: 1480px) and (min-width: 981px) {
@@ -1735,6 +1745,7 @@
                         Findings of the same kind usually get the same decision. Review a whole
                         type at once, or open one to handle its findings individually.
                     </p>
+                    <div id="groupsTruncationBanner" class="studio-truncation-banner" hidden></div>
                     <div id="reviewGroups" class="review-groups"></div>
                 </div>
 
@@ -1764,6 +1775,7 @@
                     {% else %}
                     <div class="role-readonly">Bulk review controls are unavailable to viewer role.</div>
                     {% endif %}
+                    <div id="bulkTruncationBanner" class="studio-truncation-banner" hidden></div>
                     <div class="bulk-table-wrap">
                         <table class="bulk-review-table">
                             <thead><tr><th>Finding</th><th>Risk</th><th>Status</th><th>Replacement</th><th>Action</th></tr></thead>
@@ -1870,8 +1882,33 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             initializePanelResizers();
+            initializeBulkReviewDelegatedListeners();
             reloadDocument();
         });
+
+        // Bulk-review buttons carry their target (category / finding ids) in
+        // data-* attributes rather than in an inline onclick string. Free-text
+        // categories only ever need HTML-attribute escaping this way — they
+        // are never concatenated into a JS string literal, which is what let
+        // a category like `x'),alert(1),('` execute previously.
+        function initializeBulkReviewDelegatedListeners() {
+            document.getElementById('reviewGroups')?.addEventListener('click', (event) => {
+                const button = event.target.closest('button[data-bulk-action]');
+                if (!button) return;
+                const findings = (currentDoc && currentDoc.findings) || [];
+                const group = buildReviewGroups(findings).find((g) => g.category === button.dataset.category);
+                if (group) batchReviewCategory(group, button.dataset.bulkAction);
+            });
+            document.getElementById('findingGroups')?.addEventListener('click', (event) => {
+                const button = event.target.closest('button[data-bulk-action]');
+                if (!button) return;
+                const findingIds = (button.dataset.findingIds || '')
+                    .split(',')
+                    .map(Number)
+                    .filter((n) => Number.isInteger(n) && n > 0);
+                groupBulkAction(button.dataset.bulkAction, findingIds, button.dataset.groupLabel || '');
+            });
+        }
 
         async function reloadDocument() {
             const workspace = document.querySelector('.workspace');
@@ -1961,6 +1998,7 @@
             updateContextPanels(doc);
             renderExportGate(doc);
             renderAssistant(doc);
+            renderFindingTruncationBanners(doc, findings);
             renderBulkReviewTable(findings);
             loadMatterContext(doc);
             document.getElementById('findingsTitle').textContent = isPdf ? 'Review Queue' : 'Findings';
@@ -2155,7 +2193,12 @@
             date: 'Dates',
         };
 
-        const RISK_ORDER = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+        // CRITICAL:0 is most severe. UNKNOWN sorts and displays as at least as
+        // severe as CRITICAL — an unrecognized risk value must never be
+        // mistaken for LOW (see Task 4: a group must never render a false LOW
+        // badge just because none of its members matched a known risk level).
+        const RISK_ORDER = { UNKNOWN: -1, CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+        const RESOLVED_STATUSES = new Set(['approved', 'added_by_reviewer']);
 
         function categoryLabel(category) {
             return CATEGORY_LABELS[category] || String(category || 'Other').replace(/_/g, ' ');
@@ -2166,22 +2209,53 @@
             findings.forEach((finding) => {
                 const key = finding.category || 'other';
                 if (!groups.has(key)) {
-                    groups.set(key, { category: key, items: [], pending: 0, approved: 0, rejected: 0, risk: 'LOW' });
+                    groups.set(key, { category: key, items: [], pending: 0, approved: 0, rejected: 0, unknownStatus: 0, risk: null });
                 }
                 const group = groups.get(key);
                 group.items.push(finding);
                 const status = finding.review_status || 'pending';
                 if (status === 'pending') group.pending += 1;
                 else if (status === 'rejected') group.rejected += 1;
-                else group.approved += 1;
-                // A group is as severe as its most severe member.
-                if ((RISK_ORDER[finding.risk] ?? 9) < (RISK_ORDER[group.risk] ?? 9)) group.risk = finding.risk;
+                else if (RESOLVED_STATUSES.has(status)) group.approved += 1;
+                else group.unknownStatus += 1;
+                // A group is as severe as its most severe member. A member
+                // whose risk isn't in RISK_ORDER makes the whole group
+                // 'UNKNOWN' rather than silently keeping a stale/default risk.
+                if (!(finding.risk in RISK_ORDER)) {
+                    group.risk = 'UNKNOWN';
+                } else if (group.risk === null || RISK_ORDER[finding.risk] < RISK_ORDER[group.risk]) {
+                    group.risk = finding.risk;
+                }
             });
+            for (const group of groups.values()) {
+                if (group.risk === null) group.risk = 'UNKNOWN';
+            }
             // Unfinished work first, then most severe, then largest.
             return Array.from(groups.values()).sort((a, b) =>
                 (b.pending > 0) - (a.pending > 0)
                 || (RISK_ORDER[a.risk] ?? 9) - (RISK_ORDER[b.risk] ?? 9)
                 || b.items.length - a.items.length);
+        }
+
+        // The findings array on currentDoc is capped server-side at 500 rows
+        // (see blueprints/documents.py). A group's member list, count, and
+        // risk badge only describe what's in that array — when the document
+        // has more findings than were served, say so explicitly rather than
+        // letting a review pane look complete when it isn't.
+        function renderFindingTruncationBanners(doc, findings) {
+            const total = Number(doc.finding_count ?? findings.length);
+            const shown = findings.length;
+            const message = total > shown
+                ? `Showing ${shown} of ${total} findings — review in batches or narrow the filter.`
+                : '';
+            [
+                document.getElementById('groupsTruncationBanner'),
+                document.getElementById('bulkTruncationBanner'),
+            ].forEach((banner) => {
+                if (!banner) return;
+                banner.hidden = !message;
+                banner.textContent = message;
+            });
         }
 
         function renderReviewGroups() {
@@ -2193,12 +2267,14 @@
                 return;
             }
             target.innerHTML = buildReviewGroups(findings).map((group) => {
-                const done = group.pending === 0;
-                const safeCategory = escapeHtml(group.category);
+                // A group with zero pending but nonzero unknown-status members
+                // is NOT fully reviewed — an unrecognized status must not be
+                // able to hide the Approve all / Reject all controls (Task 5).
+                const done = group.pending === 0 && group.unknownStatus === 0;
                 const controls = (canReview && group.pending)
                     ? `<div class="review-group-actions">
-                           <button class="approve" type="button" onclick="batchReviewCategory('${safeCategory}', 'approve')">Approve all ${group.pending}</button>
-                           <button class="danger" type="button" onclick="batchReviewCategory('${safeCategory}', 'reject')">Reject all ${group.pending}</button>
+                           <button class="approve" type="button" data-bulk-action="approve" data-category="${escapeAttr(group.category)}">Approve all ${group.pending}</button>
+                           <button class="danger" type="button" data-bulk-action="reject" data-category="${escapeAttr(group.category)}">Reject all ${group.pending}</button>
                        </div>`
                     : '';
                 const rows = group.items.map((finding) => `
@@ -2208,6 +2284,11 @@
                             <span class="badge status-${escapeHtml(finding.review_status || 'pending')}">${escapeHtml(finding.review_status || 'pending')}</span>
                         </button>
                     </li>`).join('');
+                const statusParts = [];
+                if (!done) statusParts.push(`${group.pending} pending`);
+                else statusParts.push('All reviewed');
+                if (group.rejected) statusParts.push(`${group.rejected} rejected`);
+                if (group.unknownStatus) statusParts.push(`${group.unknownStatus} unknown status`);
                 return `
                     <section class="review-group ${done ? 'is-done' : ''}">
                         <header class="review-group-head">
@@ -2216,9 +2297,7 @@
                                 <strong>${escapeHtml(categoryLabel(group.category))}</strong>
                                 <span class="subtle">${group.items.length} finding${group.items.length === 1 ? '' : 's'}</span>
                             </div>
-                            <div class="review-group-status subtle">
-                                ${done ? 'All reviewed' : `${group.pending} pending`}${group.rejected ? ` · ${group.rejected} rejected` : ''}
-                            </div>
+                            <div class="review-group-status subtle">${statusParts.join(' · ')}</div>
                         </header>
                         ${controls}
                         <details class="review-group-detail">
@@ -2229,16 +2308,32 @@
             }).join('');
         }
 
-        async function batchReviewCategory(category, action) {
-            if (!canReview) return;
-            const label = categoryLabel(category).toLowerCase();
-            if (action === 'reject' && !window.confirm(`Reject all pending ${label}? Rejected findings are NOT redacted on export.`)) return;
+        // Takes the rendered group object itself (not a bare category string)
+        // so the request only ever touches the pending findings this reviewer
+        // actually saw in this group — never an unbounded server-side
+        // category match that can silently reach findings outside the
+        // rendered (possibly truncated) list. See the truncation banner in
+        // renderFindingTruncationBanners for the case where the list is cut.
+        async function batchReviewCategory(group, action) {
+            if (!canReview || !group) return;
+            const label = categoryLabel(group.category).toLowerCase();
+            const pendingIds = group.items
+                .filter((finding) => (finding.review_status || 'pending') === 'pending')
+                .map((finding) => finding.id);
+            if (!pendingIds.length) return;
+            if (action === 'reject') {
+                let message = `Reject all pending ${label} (${pendingIds.length})? Rejected findings are NOT redacted on export.`;
+                if (group.risk === 'CRITICAL' || group.risk === 'HIGH' || group.risk === 'UNKNOWN') {
+                    message += ' This also removes them from the release gate’s unresolved-critical and direct-identifier counts — i.e. this is the action that unblocks external LLM release, not merely a decision to skip redaction.';
+                }
+                if (!window.confirm(message)) return;
+            }
             const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, categories: [category], only_pending: true })
+                body: JSON.stringify({ action, finding_ids: pendingIds, only_pending: true })
             });
-            await handleMutation(response, `${categoryLabel(category)} ${action === 'approve' ? 'approved' : 'rejected'}.`);
+            await handleMutation(response, (data) => `${categoryLabel(group.category)} ${action === 'approve' ? 'approved' : 'rejected'} (${data.updated ?? pendingIds.length}).`);
         }
 
         function renderBulkReviewTable(findings) {
@@ -2830,25 +2925,30 @@
                 : '<div class="subtle">No automated findings.</div>';
         }
 
-        function groupBulkButtonsHtml(pending, categories) {
-            if (!canReview || !pending) return '';
-            const categoriesCsv = escapeHtml(categories.join(','));
+        // Takes the explicit pending finding ids for this rendered group
+        // (never a bare category, which the backend would otherwise resolve
+        // against the whole table, including findings this reviewer never
+        // saw). See batchReviewCategory above for the same fix applied to the
+        // By-type pane.
+        function groupBulkButtonsHtml(pendingIds, label) {
+            if (!canReview || !pendingIds.length) return '';
+            const idsAttr = escapeAttr(pendingIds.join(','));
+            const labelAttr = escapeAttr(label);
             return `
                 <div class="group-actions">
-                    <button class="approve" type="button" onclick="groupBulkAction('approve', '${categoriesCsv}')">Approve all</button>
-                    <button class="danger" type="button" onclick="groupBulkAction('reject', '${categoriesCsv}')">Reject all</button>
+                    <button class="approve" type="button" data-bulk-action="approve" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Approve all</button>
+                    <button class="danger" type="button" data-bulk-action="reject" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Reject all</button>
                 </div>
             `;
         }
 
-        async function groupBulkAction(action, categoriesCsv) {
-            if (!canReview) return;
-            if (action === 'reject' && !window.confirm('Reject all pending findings in this group? Rejected findings will not be redacted on export.')) return;
-            const categories = String(categoriesCsv || '').split(',').filter(Boolean);
+        async function groupBulkAction(action, findingIds, label) {
+            if (!canReview || !findingIds.length) return;
+            if (action === 'reject' && !window.confirm(`Reject all ${findingIds.length} pending finding(s) in ${label || 'this group'}? Rejected findings will not be redacted on export.`)) return;
             const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, categories, only_pending: true })
+                body: JSON.stringify({ action, finding_ids: findingIds, only_pending: true })
             });
             if (!response.ok) {
                 const data = await response.json().catch(() => ({}));
@@ -2857,11 +2957,9 @@
             }
             const data = await response.json();
             if (currentDoc && currentDoc.file_extension === '.pdf') {
+                const findingIdSet = new Set(findingIds);
                 const regionIds = pdfRegions
-                    .filter((region) => {
-                        const finding = (currentDoc.findings || []).find((f) => f.id === region.finding_id);
-                        return finding && categories.includes(finding.category) && (region.review_status || 'pending') === 'pending';
-                    })
+                    .filter((region) => findingIdSet.has(region.finding_id) && (region.review_status || 'pending') === 'pending')
                     .map((region) => region.id);
                 if (regionIds.length) {
                     await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
@@ -2871,20 +2969,21 @@
                     });
                 }
             }
-            showToast(`${data.updated} finding(s) ${action === 'approve' ? 'approved' : 'rejected'}.`);
+            showToast(`${data.updated ?? findingIds.length} finding(s) ${action === 'approve' ? 'approved' : 'rejected'}.`);
             await reloadDocument();
         }
 
         function groupHtml(label, findings) {
-            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
-            const categories = [...new Set(findings.map((finding) => finding.category))];
+            const pendingIds = findings
+                .filter((finding) => (finding.review_status || 'pending') === 'pending')
+                .map((finding) => finding.id);
             return `
                 <section class="group">
                     <div class="group-title">
                         <h3>${escapeHtml(label)}</h3>
-                        <span class="badge">${findings.length} · ${pending} pending</span>
+                        <span class="badge">${findings.length} · ${pendingIds.length} pending</span>
                     </div>
-                    ${groupBulkButtonsHtml(pending, categories)}
+                    ${groupBulkButtonsHtml(pendingIds, label)}
                     ${findings.map(findingHtml).join('')}
                 </section>
             `;
@@ -3677,10 +3776,12 @@
                         const boxPending = item.regions.some((region) => (region.review_status || 'pending') === 'pending');
                         return findingPending || boxPending;
                     }).length;
-                    const categories = [...new Set(items.filter((item) => item.finding).map((item) => item.finding.category))];
+                    const findingPendingIds = items
+                        .filter((item) => item.finding && (item.finding.review_status || 'pending') === 'pending')
+                        .map((item) => item.finding.id);
                     let bulkHtml = '';
-                    if (categories.length) {
-                        bulkHtml = groupBulkButtonsHtml(pending, categories);
+                    if (findingPendingIds.length) {
+                        bulkHtml = groupBulkButtonsHtml(findingPendingIds, label);
                     } else if (canReview && pending) {
                         const regionIds = items.flatMap((item) => item.regions.map((region) => region.id)).join(',');
                         bulkHtml = `
@@ -3883,7 +3984,11 @@
                 showToast(data.error || 'Action failed.');
                 return;
             }
-            showToast(successMessage);
+            // successMessage may be a function of the parsed response body, so
+            // batch actions can surface the server's real updated-count
+            // rather than the count the client assumed it was sending.
+            const data = await response.json().catch(() => ({}));
+            showToast(typeof successMessage === 'function' ? successMessage(data) : successMessage);
             await reloadDocument();
         }
 
@@ -3914,6 +4019,24 @@
             const div = document.createElement('div');
             div.appendChild(document.createTextNode(String(value ?? '')));
             return div.innerHTML;
+        }
+
+        // escapeHtml (via a text node's innerHTML) escapes &, <, > but NOT
+        // quotes — quote-escaping only happens when the browser serializes an
+        // attribute value, not a text node. Any value interpolated into an
+        // HTML attribute (as opposed to element text) must go through this
+        // instead, or a value containing a quote can break out of the
+        // attribute. Values that also end up inside an inline event-handler
+        // string (onclick="...") need this AND must never be reachable from
+        // free-text user input — prefer data-* attributes plus a delegated
+        // listener there instead (see #reviewGroups, #findingGroups).
+        function escapeAttr(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         async function logout() {

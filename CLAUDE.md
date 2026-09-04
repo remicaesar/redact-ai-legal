@@ -43,7 +43,7 @@ Tests generally build fixtures in-memory or under a `TemporaryDirectory` and con
 These are not unit tests but repo-specific validation scripts — run them after touching `legal_analyzer/privacy.py` detection rules or extraction/OCR logic:
 
 ```bash
-python3 accuracy_audit.py --labels gold/gold_labels.example.json   # recall/precision against a hand-labeled gold set; watch false_low_count == 0
+python3 accuracy_audit.py --labels gold/gold_labels.example.json   # recall/precision against a hand-labeled gold set; watch false_low_count == 0 and risk_shortfall_count == 0
 python3 benchmark.py                                               # full benchmark -> benchmark_report.json
 python3 benchmark.py --limit 25 --api-iterations 5                 # fast smoke benchmark
 python3 benchmark.py --api-iterations 1000 --api-concurrency 50    # local concurrency check (still not real load testing)

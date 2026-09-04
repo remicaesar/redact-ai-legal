@@ -27,4 +27,8 @@ Run:
 python3 accuracy_audit.py --labels gold/gold_labels.example.json
 ```
 
-The key goal is `false_low_count = 0`.
+The key goals are `false_low_count = 0` (no document reported Low when it has undetected
+gold labels or an expected risk above Low) and `risk_shortfall_count = 0` (no document's
+computed risk level is ranked below its gold-expected level, e.g. expected High computing
+Medium — a case `false_low_count` alone cannot see, since it only fires when the computed
+level is exactly Low).

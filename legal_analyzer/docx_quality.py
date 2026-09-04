@@ -51,14 +51,16 @@ def analyze_docx_export_quality(
     added_parts = sorted(redacted_names - source_names)
     part_reports = compare_part_stats(source_parts, redacted_parts)
     leaked_targets = leaked_target_count(redacted_parts, targets)
-    warnings = quality_warnings(missing_parts, added_parts, part_reports, leaked_targets)
+    unapplied_targets = unapplied_target_count(source_parts, targets)
+    warnings = quality_warnings(missing_parts, added_parts, part_reports, leaked_targets, unapplied_targets)
     overall = "fail" if leaked_targets or missing_parts else "warn" if warnings else "pass"
 
     return {
         "overall_status": overall,
         "summary": quality_summary(overall, warnings),
-        "checks": checks(overall, missing_parts, added_parts, leaked_targets, part_reports),
+        "checks": checks(overall, missing_parts, added_parts, leaked_targets, unapplied_targets, part_reports),
         "leakage_count": leaked_targets,
+        "unapplied_target_count": unapplied_targets,
         "target_count": len([target for target in targets if target.text]),
         "missing_package_parts": missing_parts[:25],
         "added_package_parts": added_parts[:25],
@@ -131,15 +133,37 @@ def leaked_target_count(redacted_parts: dict[str, PartStats], targets: list[Reda
     return sum(1 for text in unique_targets if text in redacted_text)
 
 
+def unapplied_target_count(source_parts: dict[str, PartStats], targets: list[RedactionTarget]) -> int:
+    """Count approved targets whose text never appeared in the source at all.
+
+    leaked_target_count only inspects the output, so a target that matched
+    nothing to begin with (for example two adjacent table-cell names that
+    merged into a span the redactor never treated as contiguous text) looks
+    identical to one that was successfully removed: absent from the redacted
+    text, leakage_count 0, QA passes. This checks the other side: did the
+    target text exist in the source in the first place.
+    """
+    source_text = "\n".join(part.text for part in source_parts.values())
+    unique_targets = {target.text for target in targets if target.text}
+    return sum(1 for text in unique_targets if text not in source_text)
+
+
 def quality_warnings(
     missing_parts: list[str],
     added_parts: list[str],
     part_reports: list[dict],
     leaked_targets: int,
+    unapplied_targets: int = 0,
 ) -> list[str]:
     warnings = []
     if leaked_targets:
         warnings.append("Approved sensitive source text still appears in the redacted DOCX.")
+    if unapplied_targets:
+        warnings.append(
+            "One or more approved findings were not found in the source document, so nothing was "
+            "removed for them. Their presence in this report is not evidence of redaction — review "
+            "the document manually for those findings."
+        )
     if missing_parts:
         warnings.append("The redacted DOCX is missing package parts from the source.")
     if added_parts:
@@ -154,6 +178,7 @@ def checks(
     missing_parts: list[str],
     added_parts: list[str],
     leaked_targets: int,
+    unapplied_targets: int,
     part_reports: list[dict],
 ) -> list[dict]:
     structural_changes = sum(1 for report in part_reports if report["status"] != "pass")
@@ -162,6 +187,14 @@ def checks(
             "name": "Approved source text removed",
             "status": "fail" if leaked_targets else "pass",
             "detail": f"{leaked_targets} approved target(s) still detected in redacted DOCX.",
+        },
+        {
+            "name": "Approved targets matched in source",
+            "status": "warn" if unapplied_targets else "pass",
+            "detail": (
+                f"{unapplied_targets} approved target(s) were not found in the source document at all, "
+                "so nothing was redacted for them; their absence from the output is not evidence of removal."
+            ),
         },
         {
             "name": "DOCX package parts preserved",

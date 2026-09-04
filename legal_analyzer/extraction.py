@@ -11,9 +11,37 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 
-def normalize_text(text: str) -> str:
-    """Collapse whitespace without changing words."""
-    return re.sub(r"\s+", " ", text or "").strip()
+def normalize_layout(text: str) -> str:
+    """Normalize whitespace while preserving line and column structure.
+
+    This used to collapse every run of whitespace (including newlines) to a
+    single space, which silently destroyed the document's line structure on
+    every binary format (DOCX/PDF/UDF/PPTX/XLSX/DOC all route through here;
+    .txt input never did). Two things depend on that structure surviving:
+
+    - Several detection rules in `privacy.py` bound their trailing-context
+      match with `[^.\\n]` or `[^\\n]` so a finding stops at the end of its
+      line (health_data, criminal_allegation, privileged_or_confidential,
+      court_or_authority, address). With no newlines left, that guard never
+      fires and a finding's sample can run past the line it belongs to into
+      unrelated text -- which then can't be redacted, because redaction is
+      exact-substring match against the original document.
+    - `turkish_names._best_name_run` treats a tab or a run of 2+ spaces as a
+      column boundary, so two names side by side in a signature block or
+      table don't get merged into one bogus span. Collapsing those runs to a
+      single space erases the boundary.
+
+    So: normalize line endings, drop stray control characters, collapse long
+    runs of blank lines, and strip trailing whitespace -- but never touch a
+    run of spaces or tabs that sits within a line; that spacing is load-bearing.
+    """
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = re.sub(r"[ \t]+(?=\n)", "", text)  # trailing whitespace at end of line
+    text = re.sub(r"\n{3,}", "\n\n", text)  # collapse runs of 3+ blank lines
+    return text.strip()
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
@@ -68,24 +96,33 @@ def extract_text(path: str | Path, max_chars: int = 400_000) -> tuple[str, str |
 
 
 def extract_docx_text(path: Path, max_chars: int) -> str:
-    """Extract visible text from DOCX XML using the standard library."""
-    chunks: list[str] = []
+    """Extract visible text from DOCX XML using the standard library, one line per paragraph.
+
+    Runs within a paragraph are accumulated and only flushed to a new line on
+    a paragraph or explicit line-break boundary, so a name or address split
+    across sibling `<w:r>` runs (formatting, spell-check markers) stays on one
+    line instead of being torn apart by the line separator.
+    """
+    lines: list[str] = []
     with zipfile.ZipFile(path) as archive:
         names = [n for n in archive.namelist() if n.startswith("word/") and n.endswith(".xml")]
         for name in names:
             if name not in {"word/document.xml", "word/footnotes.xml", "word/endnotes.xml", "word/comments.xml"}:
                 continue
             root = ElementTree.fromstring(archive.read(name))
+            current: list[str] = []
             for node in root.iter():
                 if node.tag.endswith("}t") and node.text:
-                    chunks.append(node.text)
+                    current.append(node.text)
                 elif node.tag.endswith("}tab"):
-                    chunks.append("\t")
+                    current.append("\t")
                 elif node.tag.endswith("}br") or node.tag.endswith("}p"):
-                    chunks.append("\n")
-            if sum(len(c) for c in chunks) > max_chars:
+                    lines.append("".join(current))
+                    current = []
+            lines.append("".join(current))
+            if sum(len(line) for line in lines) > max_chars:
                 break
-    return normalize_text(" ".join(chunks))[:max_chars]
+    return normalize_layout("\n".join(lines))[:max_chars]
 
 
 def extract_pdf_text(path: Path, max_chars: int) -> str:
@@ -99,7 +136,7 @@ def extract_pdf_text(path: Path, max_chars: int) -> str:
             timeout=30,
         )
         if result.stdout:
-            return normalize_text(result.stdout)[:max_chars]
+            return normalize_layout(result.stdout)[:max_chars]
 
     try:
         from pypdf import PdfReader  # type: ignore
@@ -112,7 +149,7 @@ def extract_pdf_text(path: Path, max_chars: int) -> str:
         chunks.append(page.extract_text() or "")
         if sum(len(c) for c in chunks) > max_chars:
             break
-    return normalize_text(" ".join(chunks))[:max_chars]
+    return normalize_layout("\n".join(chunks))[:max_chars]
 
 
 def extract_udf_text(path: Path, max_chars: int) -> str:
@@ -135,7 +172,7 @@ def extract_udf_text(path: Path, max_chars: int) -> str:
                     break
     else:
         chunks.append(text_from_possible_markup(decode_bytes(path.read_bytes())))
-    return normalize_text(" ".join(chunk for chunk in chunks if chunk))[:max_chars]
+    return normalize_layout("\n".join(chunk for chunk in chunks if chunk))[:max_chars]
 
 
 ZIP_MEMBER_EXTENSIONS = {".docx", ".pdf", ".txt", ".md", ".udf", ".pptx", ".xlsx", ".doc"}
@@ -193,8 +230,14 @@ def extract_zip_text(path: Path, max_chars: int) -> tuple[str, str | None]:
 
 
 def extract_pptx_text(path: Path, max_chars: int) -> str:
-    """Extract slide and notes text runs from PPTX XML."""
-    chunks: list[str] = []
+    """Extract slide and notes text runs from PPTX XML, one line per paragraph.
+
+    Mirrors extract_docx_text: runs are accumulated per paragraph (`<a:p>`) and
+    only flushed to a new line at a paragraph or explicit break, so a text run
+    split across sibling runs within one paragraph is not torn onto separate
+    lines by the line separator.
+    """
+    slides: list[str] = []
     with zipfile.ZipFile(path) as archive:
         names = sorted(
             name for name in archive.namelist()
@@ -202,13 +245,19 @@ def extract_pptx_text(path: Path, max_chars: int) -> str:
         )
         for name in names:
             root = ElementTree.fromstring(archive.read(name))
+            lines: list[str] = []
+            current: list[str] = []
             for node in root.iter():
                 if node.tag.endswith("}t") and node.text:
-                    chunks.append(node.text)
-            chunks.append("\n")
-            if sum(len(c) for c in chunks) > max_chars:
+                    current.append(node.text)
+                elif node.tag.endswith("}br") or node.tag.endswith("}p"):
+                    lines.append("".join(current))
+                    current = []
+            lines.append("".join(current))
+            slides.append("\n".join(lines))
+            if sum(len(s) for s in slides) > max_chars:
                 break
-    return normalize_text(" ".join(chunks))[:max_chars]
+    return normalize_layout("\n".join(slides))[:max_chars]
 
 
 def extract_xlsx_text(path: Path, max_chars: int) -> str:
@@ -239,7 +288,7 @@ def extract_xlsx_text(path: Path, max_chars: int) -> str:
                         chunks.append(" ".join(node.text for node in child.iter() if node.tag.endswith("}t") and node.text))
             if sum(len(c) for c in chunks) > max_chars:
                 break
-    return normalize_text(" ".join(chunk for chunk in chunks if chunk))[:max_chars]
+    return normalize_layout("\n".join(chunk for chunk in chunks if chunk))[:max_chars]
 
 
 def extract_doc_text(path: Path, max_chars: int) -> tuple[str, str | None]:
@@ -255,7 +304,7 @@ def extract_doc_text(path: Path, max_chars: int) -> tuple[str, str | None]:
     )
     if result.returncode != 0 or not result.stdout.strip():
         return "", "Legacy .doc conversion produced no text; convert the file to DOCX and re-upload."
-    return normalize_text(result.stdout)[:max_chars], None
+    return normalize_layout(result.stdout)[:max_chars], None
 
 
 def decode_bytes(data: bytes) -> str:

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from legal_analyzer.privacy import analyze_privacy
 from legal_analyzer.turkish_names import detect_person_names, tr_fold
@@ -140,6 +141,49 @@ class NameWhitespaceTests(unittest.TestCase):
         self.assertEqual(len(placeholders), 1)
 
 
+class SignatureBlockColumnTests(unittest.TestCase):
+    """Regression: a wide gap (tab, or 2+ spaces) is a column boundary, not an
+    intra-name gap.
+
+    _SEP treats a tab or a run of spaces as an ordinary gap so a name run
+    could walk straight across a column boundary in a two-column signature
+    block. _MAX_NAME_TOKENS then truncated the merged four-token run at
+    three, dropping the trailing surname entirely -- it survived, unredacted,
+    in the exported document.
+    """
+
+    def test_two_names_side_by_side_resolve_separately(self):
+        """Real shape from the hearing-minutes fixture's signature block."""
+        text = "Hakim                          Katip\nSelçuk Aydın                   Elif Korkmaz\n"
+        self.assertEqual(names(text), {"Selçuk Aydın", "Elif Korkmaz"})
+
+    def test_tab_separated_names_under_signature_header_are_not_merged(self):
+        text = "İMZALAR\nMehmet\tYılmaz\tAyşe\tKaya\n"
+        self.assertEqual(names(text), {"Mehmet Yılmaz", "Ayşe Kaya"})
+
+    def test_single_name_padded_with_tab_is_still_detected(self):
+        """A wide gap may still be crossed while the run has fewer than 2 tokens,
+        so one name filling a padded cell keeps working."""
+        self.assertIn("Ahmet Yılmaz", names("Ahmet\tYılmaz"))
+
+    def test_single_name_padded_with_wide_spaces_is_still_detected(self):
+        self.assertIn("Ahmet Yılmaz", names("Ahmet                    Yılmaz"))
+
+    def test_signature_block_leaves_no_surname_unredacted(self):
+        """End-to-end: this is the test that would have caught the bug.
+
+        Two correct findings from the earlier attendee list must not stop the
+        engine from also separating the two names in the signature block --
+        if it merges them, the fourth name's surname is dropped entirely and
+        reaches the redacted export verbatim.
+        """
+        text = (Path(__file__).parent / "fixtures" / "bare_names_hearing_minutes.txt").read_text(
+            encoding="utf-8"
+        )
+        result = analyze_privacy("bare_names_hearing_minutes.txt", text)
+        self.assertNotIn("Korkmaz", result["redacted_preview"])
+
+
 class NamePrecisionGuardTests(unittest.TestCase):
     """Capitalised sequences that must NOT be flagged as people."""
 
@@ -199,6 +243,31 @@ class NamePrecisionGuardTests(unittest.TestCase):
         result = analyze_privacy("tutanak.txt", text)
         people = [f for f in result["risk_map"] if f["category"] == "natural_person_name"]
         self.assertEqual(len(people), len({f["placeholder"] for f in people}))
+
+
+class MonthNameGuardTests(unittest.TestCase):
+    """A month name only guards a candidate when it is functioning as a date.
+
+    Regression: all twelve month names were unconditional NON_PERSON_TOKENS,
+    so a real person whose given name happens to be a month word ("Eylül
+    Kaya", "Nisan Yıldırım") could never be detected -- the run was split on
+    the guard token before it could combine with the surname.
+    """
+
+    def test_month_as_given_name_is_detected(self):
+        self.assertIn("Eylül Kaya", names("Sözleşme Eylül Kaya tarafından imzalanmıştır."))
+        self.assertIn("Nisan Yıldırım", names("Nisan Yıldırım beyanda bulundu."))
+
+    def test_month_next_to_year_is_still_a_date_not_a_person(self):
+        self.assertEqual(names("Mart 2025"), set())
+        self.assertEqual(names("Toplantı Mart 2025 tarihinde yapıldı."), set())
+
+    def test_month_next_to_day_number_is_still_a_date_not_a_person(self):
+        self.assertEqual(names("15 Mart 2025"), set())
+        self.assertEqual(names("15 Mart tarihinde toplantı yapıldı."), set())
+        # "Nisan" is now gazetteer-anchored; without the day-before check this
+        # would misread the holiday-linked place name as a person "Nisan İlkokulu".
+        self.assertEqual(names("23 Nisan İlkokulu açılışı yapıldı."), set())
 
 
 class TurkishCaseFoldingTests(unittest.TestCase):

@@ -18,7 +18,7 @@ from app import (
     review_gate_counts,
 )
 from blueprints.documents import api_document_detail
-from legal_analyzer.privacy import refresh_release_state
+from legal_analyzer.privacy import CATEGORY_EXPLANATIONS, FINDING_REVIEW_STATUSES, RISK_ORDER, refresh_release_state
 
 review_bp = Blueprint("review", __name__)
 
@@ -52,8 +52,18 @@ def api_document_review(doc_id: int):
                 f"document_review.{action}",
                 doc_id,
             )
+        # Fails closed the same way as review_gate_counts() in app.py: a
+        # finding only counts as reviewed once it has a real terminal status.
+        # Checking only "= 'pending'" would let a NULL or unrecognized status
+        # (e.g. written directly via SQL) slip through unreviewed, flip
+        # redaction_completed to True, and unblock export — findings must be
+        # actually resolved, not merely not-pending.
         unreviewed = conn.execute(
-            "SELECT COUNT(*) FROM privacy_findings WHERE document_id = ? AND review_status = 'pending'",
+            """
+            SELECT COUNT(*) FROM privacy_findings
+            WHERE document_id = ?
+              AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
+            """,
             (doc_id,),
         ).fetchone()[0]
         if unreviewed:
@@ -203,7 +213,14 @@ def api_finding_review(finding_id: int):
     elif action == "pending":
         review_status = "pending"
     elif action == "update":
-        review_status = payload.get("review_status", review_status)
+        requested_status = payload.get("review_status", review_status)
+        if requested_status not in FINDING_REVIEW_STATUSES:
+            conn.close()
+            return jsonify({
+                "error": f"Unsupported review_status '{requested_status}'. Must be one of: "
+                         f"{', '.join(sorted(FINDING_REVIEW_STATUSES))}.",
+            }), 400
+        review_status = requested_status
 
     conn.execute(
         """
@@ -310,6 +327,14 @@ def api_add_finding(doc_id: int):
     reviewer_note = payload.get("reviewer_note")
     if not text:
         return jsonify({"error": "Missing exact text for reviewer-added finding"}), 400
+    if category not in CATEGORY_EXPLANATIONS:
+        return jsonify({
+            "error": f"Unsupported category '{category}'. Must be one of: {', '.join(sorted(CATEGORY_EXPLANATIONS))}.",
+        }), 400
+    if risk not in RISK_ORDER:
+        return jsonify({
+            "error": f"Unsupported risk level '{risk}'. Must be one of: {', '.join(sorted(RISK_ORDER))}.",
+        }), 400
 
     conn = get_db()
     doc = conn.execute("SELECT id FROM documents WHERE id = ?", (doc_id,)).fetchone()

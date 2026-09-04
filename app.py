@@ -582,12 +582,20 @@ def build_docx(text: str) -> bytes:
 
 
 def review_gate_counts(conn: sqlite3.Connection, doc_id: int) -> dict:
+    """Count findings the release gate must still treat as unresolved.
+
+    Fails closed: a finding only counts as resolved when its review_status is
+    one of the known terminal states (approved/rejected/added_by_reviewer).
+    NULL, 'pending', and any unrecognized value (e.g. written directly via SQL,
+    or a value that slips past input validation in the future) all count as
+    unresolved rather than being silently dropped from the gate.
+    """
     unresolved_critical_count = conn.execute(
         """
         SELECT COUNT(*)
         FROM privacy_findings
         WHERE document_id = ?
-          AND review_status = 'pending'
+          AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
           AND risk = 'CRITICAL'
         """,
         (doc_id,),
@@ -597,7 +605,7 @@ def review_gate_counts(conn: sqlite3.Connection, doc_id: int) -> dict:
         SELECT COUNT(*)
         FROM privacy_findings
         WHERE document_id = ?
-          AND review_status = 'pending'
+          AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
           AND category IN ({','.join('?' for _ in DIRECT_IDENTIFIER_CATEGORIES)})
         """,
         (doc_id, *sorted(DIRECT_IDENTIFIER_CATEGORIES)),

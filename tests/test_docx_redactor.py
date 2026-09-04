@@ -200,6 +200,41 @@ class DocxRedactorTests(unittest.TestCase):
         self.assertEqual(report["overall_status"], "fail")
         self.assertEqual(report["leakage_count"], 1)
 
+    def test_docx_quality_flags_target_never_present_in_source(self):
+        # Regression for the merged-span leak fixed in 66184b4: an approved
+        # target whose text was never contiguous in the source (e.g. two
+        # adjacent table-cell names collapsed into "Selçuk Aydın Elif") matches
+        # nothing in either source or output. leaked_target_count alone can't
+        # tell that apart from a target that really was redacted -- both report
+        # 0. unapplied_target_count is the check that catches it.
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.docx"
+            make_docx(source)
+            targets = [
+                RedactionTarget("Ahmet Yilmaz", "[PERSON_1]"),
+                RedactionTarget("Selçuk Aydın Elif", "[PERSON_2]"),
+            ]
+            data = redact_docx(source, targets)
+            report = analyze_docx_export_quality(source, data, targets)
+
+        self.assertEqual(report["leakage_count"], 0)
+        self.assertEqual(report["unapplied_target_count"], 1)
+        self.assertEqual(report["overall_status"], "warn")
+        self.assertTrue(
+            any("not found in the source document" in warning for warning in [c["detail"] for c in report["checks"]])
+        )
+
+    def test_docx_quality_reports_zero_unapplied_when_target_was_present_and_removed(self):
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.docx"
+            make_docx(source)
+            targets = [RedactionTarget("Ahmet Yilmaz", "[PERSON_1]")]
+            data = redact_docx(source, targets)
+            report = analyze_docx_export_quality(source, data, targets)
+
+        self.assertEqual(report["unapplied_target_count"], 0)
+        self.assertEqual(report["overall_status"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -309,6 +309,7 @@ html body .badge.risk-Medium {
 html body .badge.blocked,
 html body .badge.risk-High,
 html body .badge.risk-CRITICAL,
+html body .badge.risk-UNKNOWN,
 html body .badge.ready-Blocked {
     border-color: #e3b5b2;
     background: var(--color-danger-soft);

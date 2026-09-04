@@ -28,6 +28,11 @@ DIRECT_IDENTIFIER_CATEGORIES = {
     "company_name",
 }
 
+# Canonical set of `privacy_findings.review_status` values. Anything else —
+# including a value that merely looks plausible — must be treated as
+# unresolved by the release gate: see review_gate_counts() in app.py.
+FINDING_REVIEW_STATUSES = {"pending", "approved", "rejected", "added_by_reviewer"}
+
 
 @dataclass(frozen=True)
 class DetectionRule:
@@ -82,6 +87,26 @@ CATEGORY_EXPLANATIONS: dict[str, dict[str, str]] = {
         "label": "Bar registration",
         "basis": "Matched a bar/registry number keyword followed by digits.",
         "concern": "Identifies a specific attorney of record.",
+    },
+    "passport_number": {
+        "label": "Passport number",
+        "basis": "Matched a pasaport/passport keyword followed by a letter-and-digit passport number.",
+        "concern": "A government-issued identifier that uniquely identifies a person.",
+    },
+    "account_number": {
+        "label": "Bank account number",
+        "basis": "Matched a hesap no keyword followed by a labelled account number.",
+        "concern": "A financial identifier linking the document to a specific account holder.",
+    },
+    "social_media_handle": {
+        "label": "Social media handle",
+        "basis": "Matched an @handle pattern.",
+        "concern": "A public, searchable identifier that ties the document to a specific individual.",
+    },
+    "vehicle_plate": {
+        "label": "Vehicle plate",
+        "basis": "Matched a plate-number shape adjacent to a plaka/plakalı/plakası keyword.",
+        "concern": "Identifies a specific registered vehicle and, through it, its owner.",
     },
     "case_or_investigation_number": {
         "label": "Case / file number",
@@ -177,7 +202,28 @@ DETECTION_RULES = [
     DetectionRule("tax_number", r"\b(?:VKN|vergi\s*(?:kimlik\s*)?(?:no|numarasi|numarası)|tax\s*(?:id|number))[:\s]*(\d{10})\b", "HIGH", "Mask partially", "TAX_NUMBER"),
     DetectionRule("mersis_number", r"\b(?:MERS[İI]S|mersis)\s*(?:no|numarası|numarasi)?[:\s]*\d{16}\b", "HIGH", "Replace with consistent pseudonym", "MERSIS"),
     DetectionRule("mersis_number", r"\b0\d{15}\b", "HIGH", "Replace with consistent pseudonym", "MERSIS"),
-    DetectionRule("bar_registration_number", r"\b(?:baro\s*(?:sicil|no|numarası|numarasi)|sicil\s*no)[:\s]*\d{3,8}\b", "HIGH", "Replace with consistent pseudonym", "BAR_REGISTRATION"),
+    # Second alternative widened from bare "sicil\s*no": a labelled personnel
+    # registry number ("sicil numarası 884411") did not match at all, because
+    # "no" consumed only the literal word "no" and left "numarası" unmatched.
+    DetectionRule("bar_registration_number", r"\b(?:baro\s*(?:sicil|no|numarası|numarasi)|sicil\s*(?:no|numarası|numarasi))[:\s]*\d{3,8}\b", "HIGH", "Replace with consistent pseudonym", "BAR_REGISTRATION"),
+    # Passport number: same government-issued, uniquely-identifying shape as
+    # turkish_national_id/iban, so it carries the same CRITICAL risk.
+    DetectionRule("passport_number", r"\b(?:pasaport|passport)\s*(?:no|numarası|numarasi|number)?[:\s]*[A-Z]{1,2}\d{6,9}\b", "CRITICAL", "Remove completely or replace with neutral placeholder", "PASSPORT"),
+    # Labelled bank account number outside the IBAN format ("hesap no 1234-5678901").
+    # Risk matched to tax_number/mersis/bar_registration_number rather than IBAN's
+    # CRITICAL: it lacks IBAN's fixed, check-digited, country-coded structure.
+    DetectionRule("account_number", r"\bhesap\s*(?:no|numarası|numarasi)[:\s]*\d[\d\-]{4,19}\d\b", "HIGH", "Mask partially", "ACCOUNT_NUMBER"),
+    # Social media handle. Risk matched to email_address (HIGH): both are direct,
+    # public-facing contact identifiers for a specific person. The negative
+    # lookbehind keeps this from matching the "@domain" tail of an email address
+    # already covered by email_address ("test@example.com" -- "t" before "@" is
+    # a word char, so this rule does not also fire on it).
+    DetectionRule("social_media_handle", r"(?<![\w.])@[A-Za-z0-9_]{2,30}\b", "HIGH", "Replace with consistent pseudonym", "SOCIAL_HANDLE"),
+    # Vehicle plate. Deliberately anchored on a "plaka" context word on one side
+    # or the other -- an unanchored "\d{2}\s?[A-Z]{1,3}\s?\d{2,4}" shape also
+    # matches fragments of case numbers, dates, and reference codes. See the
+    # accuracy-audit note above `DETECTION_RULES` before loosening this.
+    DetectionRule("vehicle_plate", r"\b(?:plaka(?:sı|si)?\s*(?:no(?:su)?)?[:\s]*\d{2}\s?[A-ZÇĞİÖŞÜ]{1,3}\s?\d{2,4}|\d{2}\s?[A-ZÇĞİÖŞÜ]{1,3}\s?\d{2,4}\s+plaka(?:lı|li|sı|si)?)\b", "HIGH", "Replace with consistent pseudonym", "VEHICLE_PLATE"),
     DetectionRule("case_or_investigation_number", r"\b(?:soruşturma|sorusturma|kovuşturma|kovusturma|esas|karar|dosya|takip|yevmiye|talimat|değişik iş|degisik is|UYAP)\s*(?:no|numarası|numarasi)?[:\s]*[0-9]{4}\s*/\s*[0-9A-Za-z.-]+\b", "HIGH", "Replace with consistent pseudonym", "CASE_NUMBER"),
     DetectionRule("address", r"(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2}\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu|beşiktaş|besiktas|ümraniye|umraniye|[İi]stanbul)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
     DetectionRule("date", r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", "MEDIUM", "Generalize unless legally necessary", "DATE"),
@@ -380,11 +426,25 @@ def _dedupe_findings(findings: list[dict]) -> list[dict]:
     return unique
 
 
+_MAX_RISK_ORDER = max(RISK_ORDER.values()) + 1
+
+
 def build_redacted_preview(text: str, findings: list[dict], max_chars: int = 12_000) -> str:
-    """Build a pseudonymized/redacted preview from non-overlapping findings."""
+    """Build a pseudonymized/redacted preview from non-overlapping findings.
+
+    At a given start offset, prefer the highest-risk finding, then the widest
+    span. Preferring width first let a wide low-risk span (e.g. the old,
+    now-removed wide party_role span) outrank a CRITICAL identifier nested
+    inside it, so the CRITICAL finding never reached the preview. An
+    unrecognised risk value sorts as more severe than CRITICAL, consistent
+    with the fail-closed handling of unresolved review statuses elsewhere.
+    """
     chosen = []
     last_end = -1
-    for item in sorted(findings, key=lambda f: (f["start"], -(f["end"] - f["start"]))):
+    for item in sorted(
+        findings,
+        key=lambda f: (f["start"], -RISK_ORDER.get(f["risk"], _MAX_RISK_ORDER), -(f["end"] - f["start"])),
+    ):
         if item["start"] < last_end:
             continue
         chosen.append(item)

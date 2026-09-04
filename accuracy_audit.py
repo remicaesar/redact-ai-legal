@@ -19,6 +19,22 @@ def normalize(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").casefold().strip()
 
 
+RISK_RANK = {"Low": 0, "Medium": 1, "High": 2, "Unknown": 3}  # ranked by how hard it blocks
+
+
+def risk_shortfall(expected_risk: str | None, actual_risk: str) -> bool:
+    """True when the engine reports LESS risk than the gold set expects.
+
+    Complements false_low: false_low only fires when actual_risk is exactly
+    "Low", so a document expected High that computes Medium was invisible to
+    it. Over-reporting (expected Medium, computed High) fails safe and is
+    deliberately NOT flagged here.
+    """
+    if expected_risk not in RISK_RANK or actual_risk not in RISK_RANK:
+        return False
+    return RISK_RANK[actual_risk] < RISK_RANK[expected_risk]
+
+
 def label_matches_finding(label: dict, finding: dict) -> bool:
     if label.get("category") and label["category"] != finding["category"]:
         return False
@@ -77,6 +93,7 @@ def audit_document(item: dict, labels_path: Path) -> dict:
     expected_risk = item.get("expected_residual_risk")
     actual_risk = privacy["residual_risk"]["level"]
     false_low = bool(actual_risk == "Low" and (false_negatives or expected_risk in {"Medium", "High", "Unknown"}))
+    shortfall = risk_shortfall(expected_risk, actual_risk)
 
     result = {
         "id": item.get("id", doc_path.name),
@@ -91,6 +108,7 @@ def audit_document(item: dict, labels_path: Path) -> dict:
         "false_negative_count": len(false_negatives),
         "false_positive_count": len(false_positives),
         "false_low": false_low,
+        "risk_shortfall": shortfall,
         "false_negatives": false_negatives,
         "false_positives": [
             {
@@ -124,6 +142,7 @@ def audit_text_against_labels(
     matched_label_indexes, false_negatives, false_positives = score_findings(required_labels, findings)
     actual_risk = privacy["residual_risk"]["level"]
     false_low = bool(actual_risk == "Low" and (false_negatives or expected_risk in {"Medium", "High", "Unknown"}))
+    shortfall = risk_shortfall(expected_risk, actual_risk)
     return {
         "actual_residual_risk": actual_risk,
         "extraction_status": privacy["extraction_status"]["status"],
@@ -135,6 +154,7 @@ def audit_text_against_labels(
         "false_negative_count": len(false_negatives),
         "false_positive_count": len(false_positives),
         "false_low": false_low,
+        "risk_shortfall": shortfall,
     }
 
 
@@ -153,8 +173,10 @@ def run_audit(labels_path: Path) -> dict:
     false_negative_count = sum(result["false_negative_count"] for result in results)
     false_positive_count = sum(result["false_positive_count"] for result in results)
     false_low_documents = [result for result in results if result["false_low"]]
+    risk_shortfall_documents = [result for result in results if result["risk_shortfall"]]
     post_ocr_results = [result["post_ocr"] for result in results if result.get("post_ocr")]
     post_ocr_false_low_documents = [result for result in post_ocr_results if result["false_low"]]
+    post_ocr_risk_shortfall_documents = [result for result in post_ocr_results if result["risk_shortfall"]]
 
     metrics = {
         "recall": safe_divide(true_positive_labels, total_labels),
@@ -166,6 +188,8 @@ def run_audit(labels_path: Path) -> dict:
         "false_positive_count": false_positive_count,
         "false_low_count": len(false_low_documents),
         "false_low_goal": 0,
+        "risk_shortfall_count": len(risk_shortfall_documents),
+        "risk_shortfall_goal": 0,
     }
     if post_ocr_results:
         post_ocr_labels = sum(result["labels"] for result in post_ocr_results)
@@ -178,6 +202,8 @@ def run_audit(labels_path: Path) -> dict:
             "precision": safe_divide(post_ocr_findings - post_ocr_false_positive_count, post_ocr_findings),
             "false_low_count": len(post_ocr_false_low_documents),
             "false_low_goal": 0,
+            "risk_shortfall_count": len(post_ocr_risk_shortfall_documents),
+            "risk_shortfall_goal": 0,
         }
 
     return {
@@ -191,7 +217,9 @@ def run_audit(labels_path: Path) -> dict:
         "recommendation": (
             "Do not treat Low as externally safe unless false_low_count is 0 and recall has been reviewed "
             "for names, client/counterparty identifiers, addresses, IDs, case numbers, signatures/stamps, "
-            "financial data, confidential terms, and contextual identifiers."
+            "financial data, confidential terms, and contextual identifiers. false_low_count only catches "
+            "an actual risk of Low; risk_shortfall_count must also be 0 to catch the engine reporting Medium "
+            "when the gold set expects High (or any other risk-level downgrade)."
         ),
     }
 

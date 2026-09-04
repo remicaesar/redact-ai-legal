@@ -52,7 +52,7 @@ GIVEN_NAMES: frozenset[str] = frozenset(
     Fatma Ayşe Emine Hatice Zeynep Elif Meryem Şerife Zehra Sultan Hanife
     Merve Havva Aslı Aslıhan Ayla Aynur Ayten Aysel Aysun Bahar Banu Başak
     Belgin Berna Betül Bilge Burcu Buse Canan Ceren Ceyda Çiğdem Damla Derya
-    Dilek Dilan Duygu Ebru Eda Ela Emel Esra Esin Eylül Feride Figen Filiz
+    Dilek Dilan Duygu Ebru Eda Ela Emel Esra Esin Eylül Nisan Feride Figen Filiz
     Funda Gamze Gizem Gonca Gül Gülay Gülcan Gülsüm Gülşen Günay Handan Hande
     Hülya İnci İpek İrem Jale Kader Kevser Kübra Lale Leyla Melek Melis Melike
     Meltem Mine Müge Nalan Naz Nazlı Neslihan Nesrin Nihal Nilay Nilgün Nilüfer
@@ -86,8 +86,6 @@ NON_PERSON_TOKENS: frozenset[str] = frozenset(
     Cadde Caddesi Sokak Sokağı Sokagi Mahalle Mahallesi Bulvarı Bulvari
     Apartmanı Apartmani Sitesi Site Blok Daire Kat No Numara İlçesi Ilcesi
     Köyü Koyu Meydanı Meydani Plaza İş Is Merkezi Merkez
-    Ocak Şubat Subat Mart Nisan Mayıs Mayis Haziran Temmuz Ağustos Agustos
-    Eylül Eylul Ekim Kasım Kasim Aralık Aralik
     Pazartesi Salı Sali Çarşamba Carsamba Perşembe Persembe Cuma Cumartesi Pazar
     Türkiye Turkiye Cumhuriyeti Cumhuriyet Devleti Bakanlik Müdürlük
     Esas Dosya Soruşturma Sorusturma Kovuşturma Kovusturma Talimat Yevmiye
@@ -99,6 +97,32 @@ NON_PERSON_TOKENS: frozenset[str] = frozenset(
     Bugün Bugun Dün Dun Yarın Yarin Ayrıca Ayrica Ancak Nitekim Böylece Boylece
     """.split()
 )
+
+# Month names, kept out of NON_PERSON_TOKENS: unlike "Mahkemesi" or "Sözleşmesi",
+# a month name is only a date word when it sits next to a day number or a year
+# ("15 Mart", "Mart 2025"). As a bare word followed by a surname ("Nisan
+# Yıldırım") it is a given name, and splitting the run on it made that person
+# undetectable. See _is_month_as_date, which _best_name_run consults instead
+# of an unconditional guard.
+MONTH_TOKENS: frozenset[str] = frozenset(
+    tr_fold(month)
+    for month in """
+    Ocak Şubat Subat Mart Nisan Mayıs Mayis Haziran Temmuz Ağustos Agustos
+    Eylül Eylul Ekim Kasım Kasim Aralık Aralik
+    """.split()
+)
+
+# A 4-digit year right after the token, or a 1-2 digit day number right before
+# it, means the token is functioning as a date, not a name.
+_MONTH_YEAR_AFTER_RE = re.compile(r"\s+\d{4}\b")
+_MONTH_DAY_BEFORE_RE = re.compile(r"\d{1,2}\s+$")
+
+
+def _is_month_as_date(text: str, start: int, end: int) -> bool:
+    if _MONTH_YEAR_AFTER_RE.match(text, end):
+        return True
+    before = text[max(0, start - 6):start]
+    return bool(_MONTH_DAY_BEFORE_RE.search(before))
 
 # Legal-form suffixes; a candidate immediately followed by one of these is a
 # company name and belongs to the `company_name` rule instead.
@@ -178,42 +202,68 @@ def _is_rejected(candidate: str) -> bool:
     return any(tr_fold(token) in NON_PERSON_TOKENS for token in tokens)
 
 
-def _walk_tokens(text: str, pos: int, limit: int) -> list[tuple[str, int, int]]:
+def _walk_tokens(text: str, pos: int, limit: int) -> list[tuple[str, int, int, str]]:
     """Collect up to `limit` name tokens from `pos`, keeping real offsets.
 
     Offsets are carried through rather than recovered later with str.find:
     tokens may be separated by tabs or runs of spaces (signature blocks and
     table-extracted DOCX text routinely are), and a normalised "A B" string
     does not occur verbatim in "A\\tB", which silently dropped the name.
+
+    Each token also carries the raw separator text that preceded it (empty
+    for the first token), so a caller can tell a single intra-name space from
+    a tab or a run of spaces -- the latter is a column boundary in tabular
+    text (signature blocks, DOCX table cells), not part of one name.
     """
-    tokens: list[tuple[str, int, int]] = []
+    tokens: list[tuple[str, int, int, str]] = []
     cursor = pos
+    gap = ""
     while len(tokens) < limit:
         token = _TOKEN_RE.match(text, cursor)
         if not token:
             break
-        tokens.append((token.group(0), token.start(), token.end()))
+        tokens.append((token.group(0), token.start(), token.end(), gap))
         separator = _SEP_RE.match(text, token.end())
         if not separator:
             break
+        gap = separator.group(0)
         cursor = separator.end()
     return tokens
 
 
-def _best_name_run(tokens: list[tuple[str, int, int]]) -> tuple[str, int, int] | None:
+def _best_name_run(text: str, tokens: list[tuple[str, int, int, str]]) -> tuple[str, int, int] | None:
     """Pick the first run of >=2 consecutive tokens that are all person-like.
 
-    Guard tokens ("Mahkemesi", "Sözleşmesi", month names) split the sequence
-    instead of ending it, so a name that follows one is still found.
+    Guard tokens ("Mahkemesi", "Sözleşmesi") split the sequence instead of
+    ending it, so a name that follows one is still found. A month name is
+    only a guard when _is_month_as_date says it is functioning as a date
+    ("Mart 2025"); as a bare given name ("Nisan Yıldırım") it joins the run
+    like any other token.
+
+    A tab or a run of 2+ spaces before a token is a column boundary rather
+    than an ordinary word gap. Once the run already has a complete name
+    (>=2 tokens), that boundary ends it -- otherwise a two-column signature
+    block ("Selçuk Aydın" / "Elif Korkmaz" side by side) reads as one
+    four-token run and _MAX_NAME_TOKENS truncates the trailing surname
+    ("Selçuk Aydın Elif"), leaving "Korkmaz" unredacted. A single name
+    padded to fill one cell ("Ahmet\\tYılmaz") is unaffected: at that
+    boundary the run only has 1 token so it may still cross.
     """
     run: list[tuple[str, int, int]] = []
-    for token in tokens:
-        if tr_fold(token[0]) in NON_PERSON_TOKENS:
+    for value, start, end, gap in tokens:
+        wide_gap = "\t" in gap or len(gap) > 1
+        if wide_gap and len(run) >= 2:
+            break
+        folded = tr_fold(value)
+        is_guard = folded in NON_PERSON_TOKENS or (
+            folded in MONTH_TOKENS and _is_month_as_date(text, start, end)
+        )
+        if is_guard:
             if len(run) >= 2:
                 break
             run = []
             continue
-        run.append(token)
+        run.append((value, start, end))
         if len(run) == _MAX_NAME_TOKENS:
             break
     if len(run) < 2:
@@ -251,20 +301,20 @@ def detect_person_names(text: str) -> list[tuple[str, int, int]]:
     for token in _TOKEN_RE.finditer(text):
         if tr_fold(token.group(0)) not in GIVEN_NAMES:
             continue
-        run = _best_name_run(_walk_tokens(text, token.start(), _MAX_NAME_TOKENS))
+        run = _best_name_run(text, _walk_tokens(text, token.start(), _MAX_NAME_TOKENS))
         if run:
             _accept(*run, text, hits)
 
     # Path 2a - labelled lines: "Hakim: X Y".
     for match in PERSON_LABEL_RE.finditer(text):
-        run = _best_name_run(_walk_tokens(text, match.start(1), _MAX_NAME_TOKENS))
+        run = _best_name_run(text, _walk_tokens(text, match.start(1), _MAX_NAME_TOKENS))
         if run:
             _accept(*run, text, hits)
 
     # Path 2b - "X ile Y arasında".
     for match in BETWEEN_PARTIES_RE.finditer(text):
         for group in (1, 2):
-            run = _best_name_run(_walk_tokens(text, match.start(group), _MAX_NAME_TOKENS))
+            run = _best_name_run(text, _walk_tokens(text, match.start(group), _MAX_NAME_TOKENS))
             if run:
                 _accept(*run, text, hits)
 
@@ -283,7 +333,7 @@ def detect_person_names(text: str) -> list[tuple[str, int, int]]:
             anchors.append(separator.end())
         for anchor in anchors:
             marker = _LIST_MARKER_RE.match(text, anchor)
-            run = _best_name_run(_walk_tokens(text, marker.end(), _MAX_NAME_TOKENS))
+            run = _best_name_run(text, _walk_tokens(text, marker.end(), _MAX_NAME_TOKENS))
             if run:
                 _accept(*run, text, hits)
 

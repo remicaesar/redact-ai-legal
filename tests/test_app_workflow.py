@@ -1176,6 +1176,147 @@ class AppWorkflowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_batch_review_with_finding_ids_updates_only_those_ids(self):
+        # Seed more pending findings in one category than are supplied, so a
+        # regression to "resolve the whole category" (rather than exactly the
+        # given ids) would show up as updated == 3, not 2.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO privacy_findings (
+                document_id, category, sample, risk, recommended_action, placeholder,
+                replacement_text, review_status, source, fingerprint
+            ) VALUES
+                (1, 'health_data', 'Sample A', 'CRITICAL', 'Flag for review', '[HD_1]', '[HD_1]', 'pending', 'detector', 'hd1'),
+                (1, 'health_data', 'Sample B', 'CRITICAL', 'Flag for review', '[HD_2]', '[HD_2]', 'pending', 'detector', 'hd2'),
+                (1, 'health_data', 'Sample C', 'CRITICAL', 'Flag for review', '[HD_3]', '[HD_3]', 'pending', 'detector', 'hd3')
+            """
+        )
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+        ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM privacy_findings WHERE document_id = 1 AND category = 'health_data' ORDER BY id"
+            ).fetchall()
+        ]
+        conn.close()
+        self.assertEqual(len(ids), 3)
+
+        response = self.client.post(
+            "/api/document/1/findings/review-batch",
+            json={"action": "approve", "finding_ids": ids[:2], "only_pending": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["updated"], 2)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        statuses = {
+            row["id"]: row["review_status"]
+            for row in conn.execute(
+                f"SELECT id, review_status FROM privacy_findings WHERE id IN ({','.join('?' for _ in ids)})",
+                ids,
+            ).fetchall()
+        }
+        conn.close()
+        self.assertEqual(statuses[ids[0]], "approved")
+        self.assertEqual(statuses[ids[1]], "approved")
+        self.assertEqual(statuses[ids[2]], "pending")
+
+    def test_finding_update_rejects_invalid_review_status(self):
+        conn = sqlite3.connect(self.db_path)
+        finding_id = conn.execute(
+            "SELECT id FROM privacy_findings WHERE document_id = 1 ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        conn.close()
+
+        response = self.client.post(
+            f"/api/finding/{finding_id}/review",
+            json={"action": "update", "review_status": "banana"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+        conn = sqlite3.connect(self.db_path)
+        status = conn.execute(
+            "SELECT review_status FROM privacy_findings WHERE id = ?", (finding_id,)
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(status, "pending")
+
+    def test_bogus_review_status_keeps_release_gate_blocked(self):
+        # Bypass the (now-validated) API and write a non-standard status
+        # directly, the way a future code path or a manual DB fix might.
+        # redaction_completed is also set directly (bypassing mark_redacted)
+        # so this test isolates review_gate_counts() in app.py specifically —
+        # see test_mark_redacted_blocks_on_bogus_review_status for the
+        # separate mark_redacted fail-closed fix.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE privacy_findings SET review_status = 'banana' WHERE document_id = 1")
+        conn.execute("UPDATE documents SET redaction_completed = 1 WHERE id = 1")
+        conn.commit()
+        conn.close()
+
+        approved = self.client.post("/api/document/1/review", json={"action": "approve"})
+        self.assertEqual(approved.status_code, 200)
+        self.assertNotEqual(approved.json["review_status"], "approved_for_external_llm")
+        gate = approved.json["privacy_profile"]["external_llm_gate"]
+        self.assertFalse(gate["allowed"])
+        self.assertIn("Critical findings must be zero.", gate["failed_conditions"])
+
+    def test_null_review_status_counts_as_unresolved(self):
+        # Same isolation as above: set redaction_completed directly so this
+        # exercises review_gate_counts()'s NULL handling on its own.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE privacy_findings SET review_status = NULL WHERE document_id = 1")
+        conn.execute("UPDATE documents SET redaction_completed = 1 WHERE id = 1")
+        conn.commit()
+        conn.close()
+
+        approved = self.client.post("/api/document/1/review", json={"action": "approve"})
+        self.assertEqual(approved.status_code, 200)
+        gate = approved.json["privacy_profile"]["external_llm_gate"]
+        self.assertFalse(gate["allowed"])
+        self.assertIn("Critical findings must be zero.", gate["failed_conditions"])
+
+    def test_mark_redacted_blocks_on_bogus_review_status(self):
+        # mark_redacted has its own, separate "everything must be reviewed"
+        # check (review.py); it must fail closed the same way, or redaction_
+        # completed can flip to True — and get_exportable_docx gates the
+        # actual redacted-export download on redaction_completed alone — with
+        # a finding that was never actually approved or rejected.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE privacy_findings SET review_status = 'banana' WHERE document_id = 1")
+        conn.commit()
+        conn.close()
+
+        redacted = self.client.post("/api/document/1/review", json={"action": "mark_redacted"})
+        self.assertEqual(redacted.status_code, 409)
+
+        export = self.client.get("/api/document/1/redacted-export?format=docx")
+        self.assertEqual(export.status_code, 409)
+
+    def test_add_finding_rejects_invalid_category_and_risk(self):
+        bad_category = self.client.post(
+            "/api/document/1/findings",
+            json={"text": "some sensitive text", "category": "x'),alert(1),('", "risk": "HIGH"},
+        )
+        self.assertEqual(bad_category.status_code, 400)
+
+        bad_risk = self.client.post(
+            "/api/document/1/findings",
+            json={"text": "some other sensitive text", "category": "manual_sensitive_text", "risk": "SUPER_CRITICAL"},
+        )
+        self.assertEqual(bad_risk.status_code, 400)
+
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM privacy_findings WHERE document_id = 1 AND sample IN (?, ?)",
+            ("some sensitive text", "some other sensitive text"),
+        ).fetchone()[0]
+        conn.close()
+        self.assertEqual(count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

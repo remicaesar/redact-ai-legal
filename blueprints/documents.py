@@ -293,6 +293,10 @@ def api_document_detail(doc_id: int):
         "SELECT COUNT(*) FROM privacy_findings WHERE document_id = ? AND source = 'ocr'",
         (doc_id,),
     ).fetchone()[0]
+    finding_count = conn.execute(
+        "SELECT COUNT(*) FROM privacy_findings WHERE document_id = ?",
+        (doc_id,),
+    ).fetchone()[0]
     pending_finding_count = conn.execute(
         "SELECT COUNT(*) FROM privacy_findings WHERE document_id = ? AND review_status = 'pending'",
         (doc_id,),
@@ -343,6 +347,11 @@ def api_document_detail(doc_id: int):
     result = dict(doc)
     result["tags"] = tags
     result["findings"] = findings
+    # `findings` above is capped at 500 rows; these two are true, unbounded
+    # counts so the client can tell when a review group's members, count, and
+    # risk badge describe only part of the document (see the LIMIT above).
+    result["finding_count"] = finding_count
+    result["pending_finding_count"] = pending_finding_count
     result["matter"] = dict(matter) if matter else None
     result["artifacts"] = artifacts
     result["ocr_pages"] = ocr_pages

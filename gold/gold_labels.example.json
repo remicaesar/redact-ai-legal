@@ -515,7 +515,8 @@
     {
       "id": "lease_agreement",
       "path": "../tests/fixtures/lease_agreement.txt",
-      "expected_residual_risk": "Medium",
+      "expected_residual_risk": "High",
+      "expected_residual_risk_note": "Derived, not fitted to engine output: this document's own gold labels below include an `iban` (TR98 0011 1000 0000 5555 4444 33); the `iban` detection rule is CRITICAL (legal_analyzer/privacy.py DETECTION_RULES); residual_risk_assessment() returns High for any CRITICAL finding. Every other IBAN-bearing gold document (enforcement_file, commercial_contract) already expects High, so Medium here was inconsistent with the rest of the gold set.",
       "labels": [
         {
           "category": "natural_person_name",
