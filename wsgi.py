@@ -8,10 +8,10 @@ should go through a WSGI server instead:
     export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
     gunicorn --workers 4 --bind 127.0.0.1:5000 wsgi:application
 
-LEGAL_ANALYZER_SECRET_KEY is not optional here. Each worker resolves its own
-key when the variable is unset (see `resolve_secret_key` in app.py), so a
-session signed by one worker is rejected by the next three and login appears to
-fail at random.
+LEGAL_ANALYZER_SECRET_KEY is not optional anywhere: with it unset, `import app`
+raises SystemExit (see `resolve_secret_key` in app.py), so every gunicorn worker
+fails to boot with the same message rather than each minting a key of its own
+and rejecting the others' sessions.
 
 This does not make the app multi-tenant. Every authenticated user still sees
 every document — there is no per-user or per-organisation scoping in the schema

@@ -20,8 +20,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # -W error::ResourceWarning: unittest does not fail on warnings, so an
+      # unclosed handle on a redacted export used to hide inside green runs.
+      # Now it is a failure with a traceback to the opener.
       - name: Unit tests
-        run: python -m unittest discover -s tests -t .
+        run: python -W error::ResourceWarning -m unittest discover -s tests -t .
 
       # The accuracy audit is not a unit test and does not fail on its own exit
       # code, so the gate is asserted here instead. Both counts must be 0:

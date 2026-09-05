@@ -110,3 +110,97 @@ class FindingExplanationTests(unittest.TestCase):
         info = explain_category("something_new")
         self.assertEqual(info["label"], "Something New")
         self.assertTrue(info["basis"])
+
+
+class ReleaseStateRefreshTests(unittest.TestCase):
+    """refresh_release_state() must re-derive residual risk from what remains.
+
+    The happy-path refresh test above uses a document with zero findings, which
+    is why the frozen residual-risk bug survived: a clean template is Low at
+    detection time, so reusing the stored level is indistinguishable from
+    recomputing it. These tests start from a document that really does carry a
+    CRITICAL finding and a High detection-time level.
+    """
+
+    TEXT = (
+        "Istanbul 5. Asliye Ceza Mahkemesi dosyasinda Av. Ayse Demir 01.01.2026 "
+        "tarihli dilekce sundu. T.C. Kimlik No: 10000000146"
+    )
+
+    def profile(self) -> dict:
+        return analyze_privacy("dilekce.docx", self.TEXT)
+
+    def critical_findings(self, profile: dict) -> list[dict]:
+        return [f for f in profile["risk_map"] if f["risk"] == "CRITICAL"]
+
+    def test_fixture_is_critical_at_detection_time(self):
+        profile = self.profile()
+
+        self.assertTrue(self.critical_findings(profile))
+        self.assertEqual(profile["residual_risk"]["level"], "High")
+
+    def test_refresh_allows_a_document_whose_findings_are_all_redacted(self):
+        profile = self.profile()
+        refreshed = refresh_release_state(
+            profile,
+            redaction_completed=True,
+            human_review_approved=True,
+            unresolved_critical_count=0,
+            direct_identifiers_remaining=False,
+            remaining_findings=[],
+        )
+
+        self.assertEqual(refreshed["external_llm_gate"]["failed_conditions"], [])
+        self.assertTrue(refreshed["external_llm_gate"]["allowed"])
+        self.assertEqual(refreshed["post_review_residual_risk"]["level"], "Low")
+        self.assertEqual(refreshed["external_llm_readiness"], EXTERNAL_LLM_ALLOWED)
+        # The detection-time measurement is a record, not a working value.
+        self.assertEqual(refreshed["residual_risk"]["level"], "High")
+
+    def test_refresh_keeps_the_gate_closed_for_a_rejected_critical_finding(self):
+        profile = self.profile()
+        refreshed = refresh_release_state(
+            profile,
+            redaction_completed=True,
+            human_review_approved=True,
+            unresolved_critical_count=0,
+            direct_identifiers_remaining=False,
+            remaining_findings=self.critical_findings(profile),
+        )
+
+        self.assertFalse(refreshed["external_llm_gate"]["allowed"])
+        self.assertEqual(
+            refreshed["external_llm_gate"]["failed_conditions"],
+            ["Residual risk must be Low."],
+        )
+        self.assertEqual(refreshed["post_review_residual_risk"]["level"], "High")
+
+    def test_refresh_without_review_state_keeps_the_stored_level(self):
+        """A caller that cannot supply review state must not get the open answer."""
+        profile = self.profile()
+        refreshed = refresh_release_state(
+            profile,
+            redaction_completed=True,
+            human_review_approved=True,
+            unresolved_critical_count=0,
+            direct_identifiers_remaining=False,
+        )
+
+        self.assertFalse(refreshed["external_llm_gate"]["allowed"])
+        self.assertIn("Residual risk must be Low.", refreshed["external_llm_gate"]["failed_conditions"])
+        self.assertEqual(refreshed["post_review_residual_risk"]["level"], "High")
+
+    def test_refresh_keeps_extraction_gating_ahead_of_the_recompute(self):
+        """Nothing remaining is not Low when the text was never fully extracted."""
+        profile = analyze_privacy("scan.pdf", "", "PDF text extraction returned no text; OCR may be required.")
+        refreshed = refresh_release_state(
+            profile,
+            redaction_completed=True,
+            human_review_approved=True,
+            unresolved_critical_count=0,
+            direct_identifiers_remaining=False,
+            remaining_findings=[],
+        )
+
+        self.assertEqual(refreshed["post_review_residual_risk"]["level"], "Unknown")
+        self.assertFalse(refreshed["external_llm_gate"]["allowed"])

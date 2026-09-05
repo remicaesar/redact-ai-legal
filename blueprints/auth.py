@@ -149,16 +149,17 @@ def login():
     return redirect(url_for("documents.index"))
 
 
-@auth_bp.route("/logout", methods=["GET", "POST"])
+@auth_bp.route("/logout", methods=["POST"])
 @require_roles("viewer", "reviewer", "admin")
 def logout():
+    # POST only: a GET logout can be triggered by any third-party page that
+    # gets the browser to fetch the URL (an <img> tag is enough). Every UI call
+    # site already posts.
     conn = get_db()
     audit_event(conn, "logout")
     conn.commit()
     conn.close()
     session.clear()
-    if request.method == "GET":
-        return redirect(url_for("auth.login"))
     return jsonify({"ok": True})
 
 

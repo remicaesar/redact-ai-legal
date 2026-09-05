@@ -726,9 +726,19 @@
             border-radius: 2px;
             user-select: none;
         }
-        .doc-span.rejected {
+        .doc-span.dismissed {
             box-shadow: inset 0 -1px 0 #a3a39a;
             color: var(--muted);
+        }
+        /* A retained identifier is still readable in the export by reviewer
+           decision, so it must not look like a resolved or dismissed span. */
+        .doc-span.retained {
+            box-shadow: inset 0 -2px 0 #b42318;
+            background: rgba(180, 35, 24, 0.10);
+        }
+        .retain-action {
+            border-style: dashed;
+            font-weight: 600;
         }
         .doc-span.selected {
             outline: 2px solid var(--blue);
@@ -1772,7 +1782,8 @@
                     {% if can_review %}
                     <div class="bulk-toolbar">
                         <button class="approve" type="button" onclick="batchReview('approve', ['LOW', 'MEDIUM'])">Approve pending low/medium</button>
-                        <button class="danger" type="button" onclick="batchReview('reject', [])">Reject all pending</button>
+                        <button type="button" onclick="batchReview('dismiss', [])">Mark all pending not sensitive</button>
+                        <button class="danger retain-action" type="button" onclick="batchReview('retain', [])">Keep all pending unredacted</button>
                     </div>
                     {% else %}
                     <div class="role-readonly">Bulk review controls are unavailable to viewer role.</div>
@@ -1834,6 +1845,7 @@
     <div id="toast" class="toast"></div>
 
     <script src="{{ url_for('static', filename='vendor/pdfjs/pdf.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='escape.js') }}"></script>
     <script>
         const docId = Number({{ doc_id }});
         const findingExplanations = {{ finding_explanations | tojson }};
@@ -2154,7 +2166,8 @@
                 ${canReview ? `
                     <div class="assistant-actions">
                         <button class="approve" type="button" onclick="reviewAssistantAction('approve')">Approve finding</button>
-                        <button class="danger" type="button" onclick="reviewAssistantAction('reject')">Reject finding</button>
+                        <button type="button" onclick="reviewAssistantAction('dismiss')">Not sensitive</button>
+                        <button class="danger retain-action" type="button" style="grid-column:1 / -1" onclick="reviewAssistantAction('retain')">Keep unredacted — identifier stays in the export</button>
                         <button type="button" style="grid-column:1 / -1" onclick="updateCurrentFinding()">Save edit</button>
                     </div>` : '<div class="role-readonly">Viewer role can inspect this finding but cannot change it.</div>'}
                 <details class="finding-why">
@@ -2166,7 +2179,7 @@
                         <dt>Verification</dt><dd>${escapeHtml(verificationStatusLabel(evidence.verification_status))}</dd>
                     </dl>
                 </details>
-                <div class="assistant-shortcuts">A approve · R reject · E edit · J/K previous/next</div>
+                <div class="assistant-shortcuts">A approve · R not sensitive · E edit · J/K previous/next · keeping an identifier unredacted has no shortcut on purpose</div>
             `;
         }
 
@@ -2206,19 +2219,66 @@
             return CATEGORY_LABELS[category] || String(category || 'Other').replace(/_/g, ' ');
         }
 
+        // The old single "Reject" answered two different questions. 'dismiss'
+        // says the finding is a false positive and release may proceed;
+        // 'retain' says the identifier is real and the reviewer is choosing to
+        // leave it in the export, which keeps the release gate shut. The
+        // confirm text has to make that difference impossible to miss.
+        function findingActionPastTense(action) {
+            if (action === 'approve') return 'approved';
+            if (action === 'retain') return 'kept unredacted';
+            if (action === 'pending') return 'reset to pending';
+            return 'marked not sensitive';
+        }
+
+        // PDF redaction boxes have their own three-value review vocabulary
+        // (approve/reject/pending) and are a separate workflow. Both halves of
+        // the old finding "reject" leave the box un-blacked-out, so both map to
+        // the box-level 'reject'.
+        function pdfRegionActionFor(action) {
+            if (action === 'approve' || action === 'pending') return action;
+            return 'reject';
+        }
+
+        // `bulk` distinguishes a multi-finding action from a single card. It
+        // keeps the weights the pre-split UI had: a single decision goes
+        // straight through and is undoable from the toast, a bulk one asks
+        // first. 'retain' always asks, single or bulk, because it is the only
+        // decision that knowingly leaves a real identifier in the export.
+        function confirmFindingDecision(action, count, label, risk, bulk) {
+            const subject = bulk
+                ? `all ${count} pending ${label || 'finding(s)'}`
+                : `this ${label || 'finding'}`;
+            if (action === 'retain') {
+                let message = `Keep ${subject} UNREDACTED?\n\nThis records that the text is a real identifier and you are choosing to leave it in the exported document. It stays in the residual-risk assessment and will keep external LLM release blocked, and the decision is written to the audit log.`;
+                if (risk === 'CRITICAL' || risk === 'HIGH' || risk === 'UNKNOWN') {
+                    message += `\n\nRisk level: ${risk}.`;
+                }
+                return window.confirm(message);
+            }
+            if (action === 'dismiss' && bulk) {
+                return window.confirm(`Mark ${subject} as NOT SENSITIVE (false positive)?\n\nThe text is left in the document and the findings stop counting against release. Use "Keep all unredacted" instead if the text really is an identifier.`);
+            }
+            return true;
+        }
+
         function buildReviewGroups(findings) {
             const groups = new Map();
             findings.forEach((finding) => {
                 const key = finding.category || 'other';
                 if (!groups.has(key)) {
-                    groups.set(key, { category: key, items: [], pending: 0, approved: 0, rejected: 0, unknownStatus: 0, risk: null });
+                    groups.set(key, { category: key, items: [], pending: 0, approved: 0, dismissed: 0, retained: 0, unknownStatus: 0, risk: null });
                 }
                 const group = groups.get(key);
                 group.items.push(finding);
                 const status = finding.review_status || 'pending';
                 if (status === 'pending') group.pending += 1;
-                else if (status === 'rejected') group.rejected += 1;
+                else if (status === 'dismissed') group.dismissed += 1;
+                else if (status === 'retained') group.retained += 1;
                 else if (RESOLVED_STATUSES.has(status)) group.approved += 1;
+                // The pre-split 'rejected' lands here on purpose: it is no
+                // longer a status anything writes, and an unrecognised status
+                // must read as unfinished rather than as a decision.
                 else group.unknownStatus += 1;
                 // A group is as severe as its most severe member. A member
                 // whose risk isn't in RISK_ORDER makes the whole group
@@ -2276,7 +2336,8 @@
                 const controls = (canReview && group.pending)
                     ? `<div class="review-group-actions">
                            <button class="approve" type="button" data-bulk-action="approve" data-category="${escapeAttr(group.category)}">Approve all ${group.pending}</button>
-                           <button class="danger" type="button" data-bulk-action="reject" data-category="${escapeAttr(group.category)}">Reject all ${group.pending}</button>
+                           <button type="button" data-bulk-action="dismiss" data-category="${escapeAttr(group.category)}">Not sensitive — all ${group.pending}</button>
+                           <button class="danger retain-action" type="button" data-bulk-action="retain" data-category="${escapeAttr(group.category)}">Keep all ${group.pending} unredacted</button>
                        </div>`
                     : '';
                 const rows = group.items.map((finding) => `
@@ -2289,7 +2350,8 @@
                 const statusParts = [];
                 if (!done) statusParts.push(`${group.pending} pending`);
                 else statusParts.push('All reviewed');
-                if (group.rejected) statusParts.push(`${group.rejected} rejected`);
+                if (group.dismissed) statusParts.push(`${group.dismissed} not sensitive`);
+                if (group.retained) statusParts.push(`${group.retained} kept unredacted`);
                 if (group.unknownStatus) statusParts.push(`${group.unknownStatus} unknown status`);
                 return `
                     <section class="review-group ${done ? 'is-done' : ''}">
@@ -2323,19 +2385,13 @@
                 .filter((finding) => (finding.review_status || 'pending') === 'pending')
                 .map((finding) => finding.id);
             if (!pendingIds.length) return;
-            if (action === 'reject') {
-                let message = `Reject all pending ${label} (${pendingIds.length})? Rejected findings are NOT redacted on export.`;
-                if (group.risk === 'CRITICAL' || group.risk === 'HIGH' || group.risk === 'UNKNOWN') {
-                    message += ' This also removes them from the release gate’s unresolved-critical and direct-identifier counts — i.e. this is the action that unblocks external LLM release, not merely a decision to skip redaction.';
-                }
-                if (!window.confirm(message)) return;
-            }
+            if (!confirmFindingDecision(action, pendingIds.length, label, group.risk, true)) return;
             const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, finding_ids: pendingIds, only_pending: true })
             });
-            await handleMutation(response, (data) => `${categoryLabel(group.category)} ${action === 'approve' ? 'approved' : 'rejected'} (${data.updated ?? pendingIds.length}).`);
+            await handleMutation(response, (data) => `${categoryLabel(group.category)} ${findingActionPastTense(action)} (${data.updated ?? pendingIds.length}).`);
         }
 
         function renderBulkReviewTable(findings) {
@@ -2351,7 +2407,7 @@
                     <td><span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span></td>
                     <td>${escapeHtml(finding.review_status || 'pending')}</td>
                     <td>${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</td>
-                    <td>${canReview ? `<button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('approve')">Approve</button> <button class="danger" type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('reject')">Reject</button>` : 'Read only'}</td>
+                    <td>${canReview ? `<button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('approve')">Approve</button> <button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('dismiss')">Not sensitive</button> <button class="danger retain-action" type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('retain')">Keep unredacted</button>` : 'Read only'}</td>
                 </tr>
             `).join('');
             // Both views read the same findings; refresh together so switching
@@ -2524,7 +2580,8 @@
         function docSpanStatus(finding) {
             const status = finding.review_status || 'pending';
             if (status === 'approved' || status === 'added_by_reviewer') return 'approved';
-            if (status === 'rejected') return 'rejected';
+            if (status === 'dismissed') return 'dismissed';
+            if (status === 'retained') return 'retained';
             return 'pending';
         }
 
@@ -2939,14 +2996,15 @@
             return `
                 <div class="group-actions">
                     <button class="approve" type="button" data-bulk-action="approve" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Approve all</button>
-                    <button class="danger" type="button" data-bulk-action="reject" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Reject all</button>
+                    <button type="button" data-bulk-action="dismiss" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Not sensitive — all</button>
+                    <button class="danger retain-action" type="button" data-bulk-action="retain" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Keep all unredacted</button>
                 </div>
             `;
         }
 
         async function groupBulkAction(action, findingIds, label) {
             if (!canReview || !findingIds.length) return;
-            if (action === 'reject' && !window.confirm(`Reject all ${findingIds.length} pending finding(s) in ${label || 'this group'}? Rejected findings will not be redacted on export.`)) return;
+            if (!confirmFindingDecision(action, findingIds.length, label || 'finding(s)', null, true)) return;
             const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2967,11 +3025,11 @@
                     await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action, region_ids: regionIds, only_pending: true })
+                        body: JSON.stringify({ action: pdfRegionActionFor(action), region_ids: regionIds, only_pending: true })
                     });
                 }
             }
-            showToast(`${data.updated ?? findingIds.length} finding(s) ${action === 'approve' ? 'approved' : 'rejected'}.`);
+            showToast(`${data.updated ?? findingIds.length} finding(s) ${findingActionPastTense(action)}.`);
             await reloadDocument();
         }
 
@@ -3053,7 +3111,8 @@
                     ${findingRationaleHtml(finding)}
                     <div class="finding-actions">
                         <button class="approve" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'approve')">Approve</button>
-                        <button class="danger" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'reject')">Reject</button>
+                        <button type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'dismiss')">Not sensitive</button>
+                        <button class="danger retain-action" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'retain')">Keep unredacted</button>
                     </div>
                 </div>
             `;
@@ -3077,6 +3136,8 @@
 
         async function findingAction(findingId, action) {
             if (!canReview) return;
+            const finding = ((currentDoc && currentDoc.findings) || []).find((item) => item.id === findingId);
+            if (!confirmFindingDecision(action, 1, finding ? categoryLabel(finding.category) : 'finding', finding ? finding.risk : null, false)) return;
             const isDocView = currentDoc && currentDoc.file_extension !== '.pdf';
             const nextId = isDocView ? nextPendingFindingAfter(findingId) : null;
             const response = await fetch(`/api/finding/${findingId}/review`, {
@@ -3095,13 +3156,13 @@
                 const card = document.querySelector(`.finding[data-finding-id="${nextId}"]`);
                 if (card) card.scrollIntoView({ block: 'nearest' });
             }
-            if (action === 'approve' || action === 'reject') {
-                showToast(`Finding ${action === 'approve' ? 'approved' : 'rejected'}.`, {
+            if (action === 'pending') {
+                showToast('Finding updated.');
+            } else {
+                showToast(`Finding ${findingActionPastTense(action)}.`, {
                     label: 'Undo',
                     onClick: () => undoFinding(findingId)
                 });
-            } else {
-                showToast('Finding updated.');
             }
         }
 
@@ -3131,7 +3192,11 @@
 
         async function batchReview(action, risks) {
             if (!canReview) return;
-            if (action === 'reject' && !window.confirm('Reject all pending findings? Rejected findings will not be redacted on export.')) return;
+            const pendingCount = ((currentDoc && currentDoc.findings) || [])
+                .filter((finding) => (finding.review_status || 'pending') === 'pending'
+                    && (!risks.length || risks.includes(finding.risk)))
+                .length;
+            if (!confirmFindingDecision(action, pendingCount, 'finding(s)', null, true)) return;
             const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3704,7 +3769,11 @@
                 reviewAssistantAction('approve');
             } else if (event.key === 'r' || event.key === 'R' || event.key === 'Delete' || event.key === 'Backspace') {
                 event.preventDefault();
-                reviewAssistantAction('reject');
+                // R keeps the meaning it had in practice: "this is a false
+                // positive". Keeping a real identifier unredacted is the other
+                // half of the old Reject and it deliberately has no shortcut —
+                // it must be clicked and confirmed.
+                reviewAssistantAction('dismiss');
             }
         });
 
@@ -3747,7 +3816,8 @@
             const actions = canReview ? `
                 <div class="finding-actions">
                     <button type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'approve')">Approve</button>
-                    <button class="danger" type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'reject')">Reject</button>
+                    <button type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'dismiss')">Not sensitive</button>
+                    <button class="danger retain-action" type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'retain')">Keep unredacted</button>
                 </div>` : '';
             return `
                 <div class="finding queue-item" data-region-ids="${regionIds}" onclick="queueLocate('${regionIds}')">
@@ -3825,6 +3895,8 @@
         async function queueAction(event, findingId, regionIdsCsv, action) {
             event.stopPropagation();
             if (!canReview) return;
+            const queued = ((currentDoc && currentDoc.findings) || []).find((item) => item.id === findingId);
+            if (!confirmFindingDecision(action, 1, queued ? categoryLabel(queued.category) : 'item', queued ? queued.risk : null, false)) return;
             const regionIds = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
             if (findingId) {
                 const response = await fetch(`/api/finding/${findingId}/review`, {
@@ -3842,7 +3914,7 @@
                 const response = await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action, region_ids: regionIds, only_pending: false })
+                    body: JSON.stringify({ action: pdfRegionActionFor(action), region_ids: regionIds, only_pending: false })
                 });
                 if (!response.ok) {
                     const data = await response.json().catch(() => ({}));
@@ -3851,7 +3923,7 @@
                 }
             }
             await reloadDocument();
-            const message = action === 'approve' ? 'Item and linked box(es) approved.' : 'Item and linked box(es) rejected.';
+            const message = `Item and linked box(es) ${findingActionPastTense(action)}.`;
             if (findingId) {
                 showToast(message, { label: 'Undo', onClick: () => undoFinding(findingId, regionIdsCsv) });
             } else if (regionIds.length) {
@@ -4015,30 +4087,6 @@
             toast.classList.add('show');
             clearTimeout(window.toastTimer);
             window.toastTimer = setTimeout(() => toast.classList.remove('show'), action ? 6000 : 2600);
-        }
-
-        function escapeHtml(value) {
-            const div = document.createElement('div');
-            div.appendChild(document.createTextNode(String(value ?? '')));
-            return div.innerHTML;
-        }
-
-        // escapeHtml (via a text node's innerHTML) escapes &, <, > but NOT
-        // quotes — quote-escaping only happens when the browser serializes an
-        // attribute value, not a text node. Any value interpolated into an
-        // HTML attribute (as opposed to element text) must go through this
-        // instead, or a value containing a quote can break out of the
-        // attribute. Values that also end up inside an inline event-handler
-        // string (onclick="...") need this AND must never be reachable from
-        // free-text user input — prefer data-* attributes plus a delegated
-        // listener there instead (see #reviewGroups, #findingGroups).
-        function escapeAttr(value) {
-            return String(value ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
         }
 
         async function logout() {

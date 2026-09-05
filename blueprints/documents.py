@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from app import (
     require_roles,
     resolve_document_path,
     save_uploaded_document,
+    strip_unsafe_html_chars,
     template_user_context,
 )
 from legal_analyzer.classifier import supported_file
@@ -29,6 +31,30 @@ from legal_analyzer.status import compute_pipeline_status
 from legal_analyzer.taxonomy import OUTPUT_POSITIONING, TERMINOLOGY
 
 documents_bp = Blueprint("documents", __name__)
+
+
+def fts_match_expression(search: str) -> str:
+    """Build an FTS5 MATCH expression that treats each search word literally.
+
+    Every word is wrapped in an FTS5 double-quoted string so query syntax in
+    user input is inert. A double quote inside the word has to be doubled: it
+    used to be interpolated raw, so a search for `a"` ended the quoted string
+    early and SQLite raised OperationalError ("unterminated string"), which
+    reached the client as a 500.
+    """
+    quoted = [word.replace('"', '""') for word in search.split() if word]
+    return " OR ".join(f'"{word}"*' for word in quoted)
+
+
+def sanitized_display_filename(name: str) -> str:
+    """Drop characters from an uploaded filename that break HTML rendering.
+
+    The stored filename is rendered into HTML attributes (title="...") in the
+    dashboard and matter templates, and it comes straight from the upload, so
+    the quote/angle-bracket characters are dropped here as well as escaped at
+    render time.
+    """
+    return strip_unsafe_html_chars(name).strip() or "uploaded_document"
 
 
 @documents_bp.route("/")
@@ -137,6 +163,16 @@ def api_documents():
     review_status = request.args.get("review_status", "")
     ocr_status = request.args.get("ocr_status", "")
 
+    # int() on a non-numeric filter used to raise ValueError below, mid-query
+    # build, which surfaced as a 500 (and, with the debugger on, an error page
+    # rendering frame locals). Reject the input instead.
+    try:
+        category_filter = int(category_id) if category_id else None
+        client_filter = int(client_id) if client_id else None
+    except ValueError:
+        conn.close()
+        return jsonify({"error": "The category and client filters must be numeric ids."}), 400
+
     query = """
         SELECT
             d.id, d.filename, d.filepath, d.file_extension, d.file_size,
@@ -169,13 +205,13 @@ def api_documents():
 
     if search:
         query += " AND d.id IN (SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?)"
-        params.append(" OR ".join(f'"{word}"*' for word in search.split() if word))
-    if category_id:
+        params.append(fts_match_expression(search))
+    if category_filter is not None:
         query += " AND d.category_id = ?"
-        params.append(int(category_id))
-    if client_id:
+        params.append(category_filter)
+    if client_filter is not None:
         query += " AND d.client_id = ?"
-        params.append(int(client_id))
+        params.append(client_filter)
     if file_type:
         query += " AND d.file_extension = ?"
         params.append(file_type)
@@ -389,7 +425,7 @@ def api_upload_document():
         conn = get_db()
         return audited_error(conn, "No file was uploaded.", 400, "document.upload")
 
-    original_name = Path(uploaded.filename).name
+    original_name = sanitized_display_filename(Path(uploaded.filename).name)
     if not supported_file(original_name):
         conn = get_db()
         return audited_error(
@@ -398,6 +434,19 @@ def api_upload_document():
             415,
             "document.upload",
             metadata={"filename": original_name, "extension": Path(original_name).suffix.lower()},
+        )
+
+    uploaded.stream.seek(0, os.SEEK_END)
+    upload_size = uploaded.stream.tell()
+    uploaded.stream.seek(0)
+    if upload_size > app_module.MAX_UPLOAD_BYTES:
+        conn = get_db()
+        return audited_error(
+            conn,
+            f"Uploaded file is larger than the {app_module.MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+            413,
+            "document.upload",
+            metadata={"file_size": upload_size, "limit_bytes": app_module.MAX_UPLOAD_BYTES},
         )
 
     requested_matter_id = request.form.get("matter_id")

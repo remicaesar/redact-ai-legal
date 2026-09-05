@@ -70,6 +70,7 @@
             </main>
         </div>
     </div>
+    <script src="{{ url_for('static', filename='escape.js') }}"></script>
     <script>
         const matterId = Number({{ matter_id }});
         document.addEventListener('DOMContentLoaded', () => { loadMatter(); loadMatrix(); });
@@ -128,7 +129,6 @@
                 document.getElementById(`${tab}Tab`).style.display = tab === name ? '' : 'none';
             });
         }
-        function escapeHtml(value) { const div = document.createElement('div'); div.appendChild(document.createTextNode(String(value ?? ''))); return div.innerHTML; }
         async function logout() { await fetch('/logout', { method: 'POST' }); window.location.href = '/login'; }
     </script>
 </body>

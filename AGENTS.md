@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex when working with code in this repository.
 
 ## What this is
 
@@ -43,13 +43,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export LEGAL_ANALYZER_ADMIN_PASSWORD="change-this-local-password"
-python3 db/init_db.py       # destructive: wipes and reseeds db/legal_documents.db (set KEEP_DB=1 to skip wipe)
+python3 db/init_db.py       # safe: keeps an existing db/legal_documents.db and tops it up
+python3 db/init_db.py --reset  # DESTRUCTIVE: prints row counts, then wipes and reseeds
 python3 db/migrate.py       # apply pending migrations to an existing db
 python3 classify.py         # scans DEFAULT_STOCK_DIR + extra files, populates the db
 python3 app.py
 ```
 
-App runs at `http://127.0.0.1:5000` (the `.Codex/launch.json` config runs it on port 5001 instead, with `LEGAL_ANALYZER_ADMIN_PASSWORD=<your-local-password>`). The first local admin user is created from `LEGAL_ANALYZER_ADMIN_USERNAME` (default `admin`) / `LEGAL_ANALYZER_ADMIN_PASSWORD` env vars on first DB connection (`bootstrap_admin_from_env` in `app.py`).
+App runs at `http://127.0.0.1:5000`. Set `LEGAL_ANALYZER_ADMIN_PASSWORD` and `LEGAL_ANALYZER_SECRET_KEY` in your environment; neither has a default and the app refuses to start without the secret key. The first local admin user is created from `LEGAL_ANALYZER_ADMIN_USERNAME` (default `admin`) / `LEGAL_ANALYZER_ADMIN_PASSWORD` env vars on first DB connection (`bootstrap_admin_from_env` in `app.py`).
 
 
 ### Database migrations
@@ -81,7 +82,7 @@ python3 benchmark.py --limit 25 --api-iterations 5                 # fast smoke 
 python3 benchmark.py --api-iterations 1000 --api-concurrency 50    # local concurrency check (still not real load testing)
 ```
 
-`gold/` holds the synthetic gold-label set (14 documents, 97 required labels) used to validate the Turkish/English PII detection rules — extend it with real labeled documents before trusting it for production accuracy claims.
+`gold/` holds the synthetic gold-label set (17 documents, 117 required labels) used to validate the Turkish/English PII detection rules — extend it with real labeled documents before trusting it for production accuracy claims.
 
 ## Architecture
 

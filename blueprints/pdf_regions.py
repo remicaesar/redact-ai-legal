@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 
 from flask import Blueprint, g, jsonify, request, send_file
@@ -283,7 +284,13 @@ def api_pdf_export_artifact_latest(doc_id: int):
         return audited_error(conn, "The saved reviewed redacted PDF file was not found on disk.", 404, "export.redacted_pdf_artifact", doc_id)
     audit_and_commit(conn, "export.redacted_pdf_artifact", document_id=doc_id, metadata={"artifact_id": artifact["id"]})
     conn.close()
-    return send_file(artifact_path, as_attachment=True, download_name=artifact_path.name, mimetype="application/pdf")
+    # Read the artifact under a with block rather than handing send_file the
+    # path: send_file opens the file itself and only closes it when the
+    # response is closed, which leaked an open handle per download
+    # (ResourceWarning: unclosed file) whenever a caller did not close it.
+    with artifact_path.open("rb") as handle:
+        data = handle.read()
+    return send_file(BytesIO(data), as_attachment=True, download_name=artifact_path.name, mimetype="application/pdf")
 
 
 @pdf_regions_bp.route("/api/document/<int:doc_id>/pdf/qa/latest")

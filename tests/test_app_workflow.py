@@ -1,13 +1,20 @@
+import gc
 import json
 import sqlite3
 import unittest
+import warnings
+from unittest import mock
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import tests.env_setup  # noqa: F401  -- sets LEGAL_ANALYZER_SECRET_KEY before app is imported
 import app as app_module
 import fitz
+from blueprints.documents import sanitized_display_filename
+from legal_analyzer.docx_quality import analyze_docx_export_quality
+from legal_analyzer.docx_redactor import redact_docx
 from legal_analyzer.pdf_redactor import extract_pdf_text_from_bytes
 from legal_analyzer.taxonomy import CATEGORIES, SUBCATEGORIES
 from legal_analyzer.privacy import analyze_privacy
@@ -235,13 +242,33 @@ class AppWorkflowTests(unittest.TestCase):
             json={"action": "approve", "risks": ["MEDIUM"], "only_pending": True},
         )
         self.assertEqual(approve_medium.status_code, 200)
-        reject_critical = self.client.post(
+        # Approve rather than reject the CRITICAL findings. This test's subject is
+        # the export gate (409 before approval, 200 after), and resolving the
+        # CRITICALs by approving them exercises that without depending on what a
+        # *rejected* CRITICAL should mean for release — which is a deliberate open
+        # question, not settled behaviour. Rejecting is how a reviewer dismisses a
+        # false positive (10 of the 58 FPs in the gold set are CRITICAL-risk
+        # semantic categories), so "rejected" cannot simply be read as "the
+        # reviewer chose to keep a real identifier". Whichever way that is
+        # resolved, it gets its own explicit test rather than riding on this one.
+        approve_critical = self.client.post(
             "/api/document/1/findings/review-batch",
-            json={"action": "reject", "risks": ["CRITICAL"], "only_pending": True},
+            json={"action": "approve", "risks": ["CRITICAL"], "only_pending": True},
         )
-        self.assertEqual(reject_critical.status_code, 200)
+        self.assertEqual(approve_critical.status_code, 200)
         redacted = self.client.post("/api/document/1/review", json={"action": "mark_redacted"})
         self.assertEqual(redacted.status_code, 200)
+
+        # Redaction complete but human review not approved yet. Without this
+        # step the test's name was a claim it never checked: the only 409 it
+        # asserted was before redaction was marked complete, so deleting the
+        # approval gate left it green.
+        before_approval = self.client.get("/api/document/1/redacted-export?format=docx")
+        self.assertEqual(before_approval.status_code, 409)
+        self.assertIn("Human review approval", before_approval.json["error"])
+        qa_before_approval = self.client.get("/api/document/1/redacted-export/qa?format=docx")
+        self.assertEqual(qa_before_approval.status_code, 409)
+
         approved = self.client.post("/api/document/1/review", json={"action": "approve"})
         self.assertEqual(approved.status_code, 200)
         self.assertEqual(approved.json["review_status"], "approved_for_external_llm")
@@ -277,6 +304,313 @@ class AppWorkflowTests(unittest.TestCase):
         audit = admin_client.get("/api/audit-log?action=export.redacted_docx")
         self.assertEqual(audit.status_code, 200)
         self.assertGreaterEqual(audit.json["total"], 1)
+
+    def seed_leaky_docx_document(self, doc_id: int = 4) -> tuple[int, Path]:
+        """A DOCX whose text really contains the sample of a CRITICAL finding."""
+        text = "Musteri kaydi: TCKN 10000000146 dosyaya eklendi."
+        source_path = self.tmp_path / "leaky.docx"
+        make_docx(source_path, text)
+        profile = analyze_privacy("leaky.docx", text)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO documents (
+                id, filename, filepath, file_extension, file_size, title, extraction_status,
+                privacy_profile, residual_risk, risk_summary, recommended_strategy,
+                external_llm_readiness, human_review_required, redaction_status,
+                review_status, ocr_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                doc_id,
+                "leaky.docx",
+                str(source_path),
+                ".docx",
+                source_path.stat().st_size,
+                "leaky",
+                "Complete",
+                json.dumps(profile),
+                profile["residual_risk"]["level"],
+                profile["residual_risk"]["summary"],
+                profile["recommended_strategy"],
+                profile["external_llm_readiness"],
+                1,
+                profile["redaction_status"],
+                "pending_review",
+                "not_required",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO privacy_findings (
+                document_id, category, sample, risk, recommended_action, placeholder,
+                replacement_text, review_status, source, fingerprint
+            ) VALUES (?, 'turkish_national_id', '10000000146', 'CRITICAL', 'Redact direct identifier',
+                      '[TCKN_1]', '[TCKN_REDACTED]', 'pending', 'detector', 'leakfp1')
+            """,
+            (doc_id,),
+        )
+        conn.commit()
+        conn.close()
+        return doc_id, source_path
+
+    def finding_id_for(self, doc_id: int, category: str) -> int:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return conn.execute(
+                "SELECT id FROM privacy_findings WHERE document_id = ? AND category = ?",
+                (doc_id, category),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_docx_export_blocks_finding_reverted_to_pending_after_redaction_was_marked_complete(self):
+        # redaction_completed is a latch: reverting a finding to 'pending' does
+        # not clear it, and redaction_targets_for_document() then drops that
+        # finding from the targets. Both old gates (docx + redaction_completed)
+        # still read as satisfied, so the export carried the TCKN in cleartext.
+        doc_id, source_path = self.seed_leaky_docx_document()
+        self.client.post(
+            f"/api/document/{doc_id}/findings/review-batch",
+            json={"action": "approve", "risks": ["CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "approve"}).status_code, 200)
+
+        exported = self.client.get(f"/api/document/{doc_id}/redacted-export?format=docx")
+        self.assertEqual(exported.status_code, 200)
+        with ZipFile(BytesIO(exported.data)) as archive:
+            self.assertNotIn("10000000146", archive.read("word/document.xml").decode("utf-8"))
+
+        finding_id = self.finding_id_for(doc_id, "turkish_national_id")
+        reverted = self.client.post(f"/api/finding/{finding_id}/review", json={"action": "pending"})
+        self.assertEqual(reverted.status_code, 200)
+        self.assertEqual(reverted.json["review_status"], "pending")
+
+        blocked = self.client.get(f"/api/document/{doc_id}/redacted-export?format=docx")
+        self.assertEqual(blocked.status_code, 409)
+        self.assertIn("Every privacy finding must be decided", blocked.json["error"])
+        blocked_qa = self.client.get(f"/api/document/{doc_id}/redacted-export/qa?format=docx")
+        self.assertEqual(blocked_qa.status_code, 409)
+
+        # And the QA report itself must not call that export clean. Given only
+        # the targets it can't see the reverted finding at all; given the
+        # document's unrejected findings it can.
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        targets = app_module.redaction_targets_for_document(conn, doc_id)
+        samples = app_module.sensitive_samples_for_document(conn, doc_id)
+        conn.close()
+        self.assertEqual(targets, [])
+        self.assertIn("10000000146", samples)
+
+        data = redact_docx(source_path, targets)
+        blind_report = analyze_docx_export_quality(source_path, data, targets)
+        self.assertEqual(blind_report["overall_status"], "pass")  # the blindness this fix is about
+        self.assertEqual(blind_report["leakage_count"], 0)
+
+        report = analyze_docx_export_quality(source_path, data, targets, sensitive_samples=samples)
+        self.assertNotEqual(report["overall_status"], "pass")
+        self.assertEqual(report["overall_status"], "fail")
+        self.assertGreaterEqual(report["leakage_count"], 1)
+
+    def test_docx_export_qa_measures_leakage_against_unrejected_findings(self):
+        # A rejected finding is text a reviewer decided not to remove, so its
+        # presence in the output is not leakage; an unrejected one is.
+        doc_id, source_path = self.seed_leaky_docx_document(doc_id=5)
+        self.client.post(
+            f"/api/document/{doc_id}/findings/review-batch",
+            json={"action": "reject", "risks": ["CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "approve"}).status_code, 200)
+
+        qa = self.client.get(f"/api/document/{doc_id}/redacted-export/qa?format=docx")
+        self.assertEqual(qa.status_code, 200)
+        self.assertEqual(qa.json["leakage_count"], 0)
+        self.assertEqual(qa.json["sensitive_sample_count"], 0)
+        self.assertEqual(qa.json["overall_status"], "pass")
+
+    def test_docx_export_qa_states_deliberately_retained_identifiers(self):
+        # 'retained' means the reviewer decided a real identifier stays in the
+        # export, so its presence is not leakage and leakage_count is 0 by
+        # construction. Without a distinct count the report would be an
+        # unqualified "pass" on a DOCX that still carries a checksum-valid TCKN
+        # in cleartext -- exactly the kind of clean-looking QA output the
+        # sensitive-sample widening was introduced to prevent.
+        doc_id, _ = self.seed_leaky_docx_document(doc_id=6)
+        retained = self.client.post(
+            f"/api/document/{doc_id}/findings/review-batch",
+            json={"action": "retain", "risks": ["CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(retained.status_code, 200)
+        self.assertEqual(retained.json["review_status"], "retained")
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "approve"}).status_code, 200)
+
+        qa = self.client.get(f"/api/document/{doc_id}/redacted-export/qa?format=docx")
+        self.assertEqual(qa.status_code, 200)
+        self.assertEqual(qa.json["leakage_count"], 0)
+        self.assertEqual(qa.json["retained_count"], 1)
+        self.assertNotEqual(qa.json["overall_status"], "pass")
+        retained_checks = [check for check in qa.json["checks"] if check["name"] == "Identifiers deliberately retained"]
+        self.assertEqual(len(retained_checks), 1)
+        self.assertEqual(retained_checks[0]["status"], "warn")
+        self.assertIn("1 finding(s) were retained unredacted", retained_checks[0]["detail"])
+
+        # And the evidence rows must not be stamped "verified redacted" either.
+        conn = sqlite3.connect(self.db_path)
+        statuses = {
+            row[0]
+            for row in conn.execute(
+                "SELECT verification_status FROM finding_evidence WHERE document_id = ?", (doc_id,)
+            )
+        }
+        conn.close()
+        self.assertNotIn("redacted_verified", statuses)
+
+    def approve_pdf_pipeline_and_export(self, doc_id: int = 3) -> None:
+        """Drive document 3 through the PDF gates so a saved artifact exists."""
+        generated = self.client.post(f"/api/document/{doc_id}/pdf/regions/generate", json={})
+        self.assertEqual(generated.status_code, 200)
+        for region in generated.json["regions"]:
+            self.assertEqual(
+                self.client.post(f"/api/document/{doc_id}/pdf/regions/{region['id']}/approve", json={}).status_code, 200
+            )
+        self.client.post(
+            f"/api/document/{doc_id}/findings/review-batch",
+            json={"action": "approve", "risks": ["HIGH", "CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post(f"/api/document/{doc_id}/review", json={"action": "approve"}).status_code, 200)
+        exported = self.client.get(f"/api/document/{doc_id}/redacted-export?format=pdf&style=black_box")
+        self.assertEqual(exported.status_code, 200)
+
+    def test_saved_pdf_artifact_download_leaves_no_open_file_handle(self):
+        # send_file(path) opens the file itself and only closes it when the
+        # response is closed, so every download of the saved artifact leaked an
+        # open handle (ResourceWarning: unclosed file). The warning is raised
+        # from __del__, so it never fails a plain test run -- it has to be
+        # collected explicitly.
+        self.approve_pdf_pipeline_and_export()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            response = self.client.get("/api/document/3/pdf/export-artifact/latest")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content_type, "application/pdf")
+            del response
+            gc.collect()
+
+        leaked = [str(item.message) for item in caught if item.category is ResourceWarning]
+        self.assertEqual(leaked, [])
+
+    def test_document_list_filters_reject_unusable_input_instead_of_failing(self):
+        # Each of these used to reach the client as a 500: a quote broke the
+        # FTS5 MATCH expression, and a non-numeric filter raised ValueError.
+        quoted_search = self.client.get('/api/documents?search=a"')
+        self.assertEqual(quoted_search.status_code, 200)
+        plain_prefix = self.client.get("/api/documents?search=a")
+        self.assertEqual(plain_prefix.status_code, 200)
+        # The FTS5 tokenizer drops the quote, so an escaped `a"` has to behave
+        # exactly like `a` rather than raising "unterminated string".
+        self.assertEqual(
+            [doc["id"] for doc in quoted_search.json["documents"]],
+            [doc["id"] for doc in plain_prefix.json["documents"]],
+        )
+
+        embedded_quote = self.client.get('/api/documents?search=cle"an template')
+        self.assertEqual(embedded_quote.status_code, 200)
+
+        plain_search = self.client.get("/api/documents?search=clean")
+        self.assertEqual(plain_search.status_code, 200)
+        self.assertEqual([doc["filename"] for doc in plain_search.json["documents"]], ["clean.docx"])
+
+        bad_category = self.client.get("/api/documents?category=abc")
+        self.assertEqual(bad_category.status_code, 400)
+        self.assertIn("numeric", bad_category.json["error"])
+
+        bad_client = self.client.get("/api/documents?client=1;DROP")
+        self.assertEqual(bad_client.status_code, 400)
+
+        good_category = self.client.get("/api/documents?category=1")
+        self.assertEqual(good_category.status_code, 200)
+
+    def test_upload_rejects_a_file_over_the_size_cap(self):
+        upload_dir = self.tmp_path / "uploads"
+        with mock.patch.object(app_module, "UPLOAD_DIR", upload_dir):
+            with mock.patch.object(app_module, "MAX_UPLOAD_BYTES", 16):
+                response = self.client.post(
+                    "/api/upload",
+                    data={"file": (BytesIO(b"x" * 64), "too_big.txt")},
+                    content_type="multipart/form-data",
+                )
+
+            self.assertEqual(response.status_code, 413)
+            self.assertIn("larger than", response.json["error"])
+            # Rejected before uploaded.save(), so nothing was written at all.
+            self.assertEqual(sorted(upload_dir.glob("*")) if upload_dir.exists() else [], [])
+
+            accepted = self.client.post(
+                "/api/upload",
+                data={"file": (BytesIO(b"x" * 64), "small_enough.txt")},
+                content_type="multipart/form-data",
+            )
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(len(list(upload_dir.glob("*small_enough.txt"))), 1)
+
+    def test_upload_strips_html_breaking_characters_from_the_filename(self):
+        # A double quote never survives the multipart Content-Disposition
+        # header (werkzeug truncates the filename there), so the reachable
+        # characters over HTTP are the apostrophe and the angle brackets; the
+        # full set is covered by the unit test below.
+        with mock.patch.object(app_module, "UPLOAD_DIR", self.tmp_path / "uploads"):
+            response = self.client.post(
+                "/api/upload",
+                data={"file": (BytesIO(b"Public template"), "di\'lek<b>.txt")},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        stored_name = response.json["filename"]
+        for char in "\"'<>":
+            self.assertNotIn(char, stored_name)
+        self.assertEqual(stored_name, "dilekb.txt")
+
+    def test_sanitized_display_filename_drops_every_html_breaking_character(self):
+        self.assertEqual(sanitized_display_filename('a"b\'c<d>e.txt'), "abcde.txt")
+        self.assertEqual(sanitized_display_filename('"\'<>'), "uploaded_document")
+        self.assertEqual(sanitized_display_filename("normal_dosya.docx"), "normal_dosya.docx")
+
+    def test_replacement_text_with_html_breaking_characters_is_rejected(self):
+        finding_id = self.finding_id_for(1, "date")
+        response = self.client.post(
+            f"/api/finding/{finding_id}/review",
+            json={"action": "approve", "replacement_text": '[DATE" onmouseover=x]'},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("quotes or angle brackets", response.json["error"])
+
+        added = self.client.post(
+            "/api/document/1/findings",
+            json={"text": "Gizli metin", "replacement_text": "[X<script>]"},
+        )
+        self.assertEqual(added.status_code, 400)
+
+        conn = sqlite3.connect(self.db_path)
+        stored = conn.execute("SELECT replacement_text FROM privacy_findings WHERE id = ?", (finding_id,)).fetchone()[0]
+        conn.close()
+        self.assertEqual(stored, "[DATE_1]")
+
+    def test_ocr_run_rejects_an_unknown_language(self):
+        self.assertEqual(self.client.post("/api/document/2/ocr/queue", json={}).status_code, 200)
+
+        response = self.client.post("/api/document/2/ocr/run", json={"language": "tur; rm -rf /"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported OCR language", response.json["error"])
+        detail = self.client.get("/api/document/2")
+        self.assertEqual(detail.json["ocr_status"], "queued")  # not left mid-flight in 'processing'
 
     def test_non_docx_actual_redacted_export_is_unsupported(self):
         response = self.client.get("/api/document/2/redacted-export?format=docx")
@@ -454,6 +788,126 @@ class AppWorkflowTests(unittest.TestCase):
                 }
             ]
         }
+
+    def drive_ocr_pdf_to_reviewable_regions(self) -> list[dict]:
+        """Doc 2 through OCR run/accept, returning its generated PDF regions.
+
+        The OCR accept path is what creates the finding_evidence rows the export
+        QA later stamps, so the retained-identifier tests below have to come
+        through here rather than seeding evidence by hand.
+        """
+        self.make_blank_scan_pdf()
+        self.assertEqual(self.client.post("/api/document/2/ocr/queue", json={}).status_code, 200)
+        self.assertEqual(self.client.post("/api/document/2/ocr/run", json=self.ocr_tokens_payload()).status_code, 200)
+        self.assertEqual(self.client.post("/api/document/2/ocr/accept", json={}).status_code, 200)
+        regions = self.client.get("/api/document/2/pdf/regions").json["regions"]
+        self.assertTrue(regions)
+        return regions
+
+    def evidence_verification_statuses(self, doc_id: int) -> set[str]:
+        conn = sqlite3.connect(self.db_path)
+        statuses = {
+            row[0]
+            for row in conn.execute(
+                "SELECT verification_status FROM finding_evidence WHERE document_id = ?", (doc_id,)
+            )
+        }
+        conn.close()
+        return statuses
+
+    def critical_finding_id(self, doc_id: int) -> int:
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT id FROM privacy_findings WHERE document_id = ? AND category = 'turkish_national_id'",
+            (doc_id,),
+        ).fetchone()
+        conn.close()
+        self.assertIsNotNone(row)
+        return row[0]
+
+    def test_pdf_export_qa_states_deliberately_retained_identifiers(self):
+        # The PDF twin of test_docx_export_qa_states_deliberately_retained_identifiers.
+        # 'retained' means the reviewer decided a real identifier stays in the
+        # export, so it is excluded from the leakage set and leakage_count is 0
+        # by construction. Keying the finding_evidence write off leakage_count
+        # alone therefore stamped "verified redacted" on a PDF the reviewer had
+        # just chosen to leave a national ID in.
+        regions = self.drive_ocr_pdf_to_reviewable_regions()
+        tckn_finding_id = self.critical_finding_id(2)
+
+        # The box over the retained identifier is rejected -- a reviewer who
+        # keeps the text does not black it out -- and the rest are approved, so
+        # the export still has an approved box and clears the PDF gates.
+        rejected = 0
+        for region in regions:
+            action = "reject" if region["finding_id"] == tckn_finding_id else "approve"
+            rejected += action == "reject"
+            self.assertEqual(
+                self.client.post(f"/api/document/2/pdf/regions/{region['id']}/{action}", json={}).status_code, 200
+            )
+        self.assertTrue(rejected)
+
+        # One finding retained, by id: doc 2 carries two CRITICAL findings, and
+        # retaining by risk would make the "1 finding(s)" wording below pass for
+        # the wrong reason.
+        retained = self.client.post(f"/api/finding/{tckn_finding_id}/review", json={"action": "retain"})
+        self.assertEqual(retained.status_code, 200)
+        self.client.post(
+            "/api/document/2/findings/review-batch",
+            json={"action": "approve", "risks": ["LOW", "MEDIUM", "HIGH", "CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(self.client.post("/api/document/2/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post("/api/document/2/review", json={"action": "approve"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/document/2/redacted-export?format=pdf&style=black_box").status_code, 200)
+
+        # leakage_count is 0 here BY CONSTRUCTION, not because the identifier
+        # was removed: a retained sample is excluded from the leakage set, and
+        # its box was rejected, so nothing in the QA looks for it at all.
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        self.assertNotIn("10000000146", app_module.sensitive_samples_for_document(conn, 2))
+        conn.close()
+
+        qa = self.client.get("/api/document/2/redacted-export/qa?format=pdf&style=black_box")
+        self.assertEqual(qa.status_code, 200)
+        self.assertEqual(qa.json["leakage_count"], 0)
+        self.assertEqual(qa.json["retained_count"], 1)
+        self.assertNotEqual(qa.json["overall_status"], "pass")
+        retained_checks = [check for check in qa.json["checks"] if check["name"] == "Identifiers deliberately retained"]
+        self.assertEqual(len(retained_checks), 1)
+        self.assertEqual(retained_checks[0]["status"], "warn")
+        self.assertIn("1 finding(s) were retained unredacted", retained_checks[0]["detail"])
+
+        # The report warning is not the point on its own -- this write is.
+        statuses = self.evidence_verification_statuses(2)
+        self.assertTrue(statuses)  # there are evidence rows to stamp
+        self.assertNotIn("redacted_verified", statuses)
+
+    def test_pdf_export_qa_verifies_an_export_with_nothing_retained(self):
+        # Anti-vacuity for the test above: with every finding approved and no
+        # leakage the stamp must still be applied, or "not verified" would be
+        # unfalsifiable and the check above would prove nothing.
+        regions = self.drive_ocr_pdf_to_reviewable_regions()
+        for region in regions:
+            self.assertEqual(
+                self.client.post(f"/api/document/2/pdf/regions/{region['id']}/approve", json={}).status_code, 200
+            )
+        self.client.post(
+            "/api/document/2/findings/review-batch",
+            json={"action": "approve", "risks": ["LOW", "MEDIUM", "HIGH", "CRITICAL"], "only_pending": True},
+        )
+        self.assertEqual(self.client.post("/api/document/2/review", json={"action": "mark_redacted"}).status_code, 200)
+        self.assertEqual(self.client.post("/api/document/2/review", json={"action": "approve"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/document/2/redacted-export?format=pdf&style=black_box").status_code, 200)
+
+        qa = self.client.get("/api/document/2/redacted-export/qa?format=pdf&style=black_box")
+        self.assertEqual(qa.status_code, 200)
+        self.assertEqual(qa.json["leakage_count"], 0)
+        self.assertEqual(qa.json["retained_count"], 0)
+        retained_checks = [check for check in qa.json["checks"] if check["name"] == "Identifiers deliberately retained"]
+        self.assertEqual([check["status"] for check in retained_checks], ["pass"])
+
+        self.assertIn("redacted_verified", self.evidence_verification_statuses(2))
 
     def test_scanned_pdf_ocr_tokens_generate_regions_and_export(self):
         self.make_blank_scan_pdf()
@@ -969,9 +1423,12 @@ class AppWorkflowTests(unittest.TestCase):
         self.assertEqual(approved.status_code, 200)
         self.assertEqual(approved.json["review_status"], "approved")
 
+        # 'reject' is kept as an API alias for the false-positive decision, so
+        # what it writes is 'dismissed' -- see the alias test in
+        # tests/test_gate_reachability.py for why it must not be 'retained'.
         rejected = self.client.post(f"/api/finding/{rejected_id}/review", json={"action": "reject"})
         self.assertEqual(rejected.status_code, 200)
-        self.assertEqual(rejected.json["review_status"], "rejected")
+        self.assertEqual(rejected.json["review_status"], "dismissed")
 
         replacement = "[SYNTHETIC_DATE_REDACTED]"
         reviewer_note = "Synthetic fixture confirmed by reviewer"
@@ -1023,7 +1480,7 @@ class AppWorkflowTests(unittest.TestCase):
             "replacement_text": replacement,
             "reviewer_note": reviewer_note,
         })
-        self.assertEqual(rejected_status, "rejected")
+        self.assertEqual(rejected_status, "dismissed")
         self.assertEqual(mapping, replacement)
         self.assertTrue(readiness)
         self.assertNotEqual(readiness, "SENTINEL")
@@ -1111,7 +1568,10 @@ class AppWorkflowTests(unittest.TestCase):
             b"event.key === 'k'",
             b"event.key === 'e'",
             b"reviewAssistantAction('approve')",
-            b"reviewAssistantAction('reject')",
+            # The single reject control was split: both decisions must be wired
+            # into the guided pane, not just the permissive one.
+            b"reviewAssistantAction('dismiss')",
+            b"reviewAssistantAction('retain')",
             b"aria-label=\"Resize matter panel\"",
             b"aria-label=\"Resize review assistant\"",
         ]

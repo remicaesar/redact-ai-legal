@@ -2,6 +2,7 @@ import unittest
 from zipfile import ZipFile
 from io import BytesIO
 
+import tests.env_setup  # noqa: F401  -- sets LEGAL_ANALYZER_SECRET_KEY before app is imported
 from app import build_docx
 
 

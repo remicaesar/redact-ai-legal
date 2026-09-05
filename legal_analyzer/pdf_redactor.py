@@ -9,6 +9,12 @@ from pathlib import Path
 
 import fitz  # type: ignore
 
+# The matcher lives in docx_redactor because that is where it was first needed;
+# it is format-agnostic. Sharing it is the point: a PDF QA pass that searched for
+# approved text with a plain `in` reported zero leaks for exactly the case and
+# diacritic variants the DOCX side already treats as leaks.
+from legal_analyzer.docx_redactor import contains_case_insensitive, purge_target_pattern_cache
+
 
 @dataclass(frozen=True)
 class PdfRegion:
@@ -159,13 +165,49 @@ def analyze_pdf_redaction_quality(
     regions: list[PdfRegion],
     region_state: dict | None = None,
     qa_target: str = "freshly_generated",
+    sensitive_samples: list[str] | None = None,
+    retained_count: int = 0,
 ) -> dict:
+    """Check a redacted PDF for extractable approved text, metadata and annotations.
+
+    Two leakage checks, answering different questions. The per-region one asks
+    "did the black box actually cover the text under it", attributed to the
+    region so the studio can highlight it. ``sensitive_samples`` -- every finding
+    sample whose presence in the export would be unexpected -- drives the wider
+    one: "is this identifier readable ANYWHERE in the output". Without it this QA
+    was structurally blind to a second occurrence of the same entity that no
+    region covers, exactly as the DOCX side was before it took the same argument.
+
+    Matching is ``contains_case_insensitive``, shared with the redactor, not a
+    plain ``in``. A survivor differing only in case or a Turkish diacritic is the
+    survivor this check exists to catch, and ``leakage_count`` is what stamps
+    ``finding_evidence.verification_status`` as ``redacted_verified``.
+
+    ``retained_count`` is how many findings the reviewer deliberately left
+    unredacted. Those samples are excluded from the leakage set -- their text
+    remaining is the expected outcome -- so without this count a PDF still
+    carrying a checksum-valid national ID reports zero leakage and nothing else.
+    A nonzero count keeps the report off "pass" and is stated in the checks, and
+    the caller must also keep it out of the ``redacted_verified`` write. This is
+    the same argument, and the same shape, as analyze_docx_export_quality().
+    """
     text_after = extract_pdf_text_from_bytes(data)
     leaked = []
     for region in regions:
         sample = (region.sample or "").strip()
-        if sample and sample in text_after:
+        if sample and contains_case_insensitive(text_after, sample):
             leaked.append({"region_id": region.region_id, "finding_id": region.finding_id, "category": region.category})
+    # Distinct texts rather than occurrences, so a region leak and the same
+    # string found by the whole-output check are one leak, not two. Region
+    # samples are folded in, so leakage_count can never read 0 while
+    # leaked_regions is non-empty.
+    sensitive_texts = {(region.sample or "").strip() for region in regions}
+    sensitive_texts.update((text or "").strip() for text in (sensitive_samples or []))
+    sensitive_texts.discard("")
+    leaked_sample_count = sum(1 for text in sensitive_texts if contains_case_insensitive(text_after, text))
+    # Compiling those texts leaves them in re's module-level cache as readable
+    # pattern strings; the QA pass is the end of the export path.
+    purge_target_pattern_cache()
     metadata = pdf_metadata_from_bytes(data)
     metadata_leaks = {key: value for key, value in metadata.items() if value}
     annotation_count = count_pdf_annotations(data)
@@ -178,9 +220,27 @@ def analyze_pdf_redaction_quality(
             "detail": f"{len(regions)} reviewed region(s) were applied.",
         },
         {
-            "name": "Approved sensitive text not extractable (includes OCR text layers)",
+            "name": "Redacted region text not extractable (includes OCR text layers)",
             "status": "pass" if not leaked else "fail",
-            "detail": f"{len(leaked)} approved sample(s) remain extractable.",
+            "detail": f"{len(leaked)} approved region(s) still have their own text extractable underneath.",
+        },
+        {
+            "name": "Approved sensitive text not extractable anywhere in the output",
+            "status": "pass" if not leaked_sample_count else "fail",
+            "detail": (
+                f"{leaked_sample_count} of {len(sensitive_texts)} finding sample(s) are still readable somewhere "
+                "in the redacted PDF, case- and diacritic-insensitively. This searches the whole extracted text, "
+                "not only the area under each box."
+            ),
+        },
+        {
+            "name": "Identifiers deliberately retained",
+            "status": "warn" if retained_count else "pass",
+            "detail": (
+                f"{retained_count} finding(s) were retained unredacted by reviewer decision, so their "
+                "text is still in this PDF. Retained samples are excluded from the leakage count above "
+                "-- a zero there does not mean the export is free of identifiers."
+            ),
         },
         {
             "name": "PDF metadata scrubbed",
@@ -217,7 +277,10 @@ def analyze_pdf_redaction_quality(
         "summary": "Reviewed PDF redaction QA completed.",
         "qa_target": qa_target,
         "region_count": len(regions),
-        "leakage_count": len(leaked),
+        "leakage_count": leaked_sample_count,
+        "region_leakage_count": len(leaked),
+        "sensitive_sample_count": len(sensitive_texts),
+        "retained_count": retained_count,
         "leaked_regions": leaked,
         "metadata_leak_count": len(metadata_leaks),
         "annotation_count": annotation_count,

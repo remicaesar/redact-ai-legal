@@ -25,3 +25,6 @@ data/exports/
 # templates are committed.
 config/clients.local.json
 config/*.local.json
+
+# graphify knowledge-graph build artifacts (regenerate with /graphify)
+graphify-out/

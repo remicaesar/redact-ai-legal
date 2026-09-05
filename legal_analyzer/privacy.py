@@ -31,7 +31,43 @@ DIRECT_IDENTIFIER_CATEGORIES = {
 # Canonical set of `privacy_findings.review_status` values. Anything else —
 # including a value that merely looks plausible — must be treated as
 # unresolved by the release gate: see review_gate_counts() in app.py.
-FINDING_REVIEW_STATUSES = {"pending", "approved", "rejected", "added_by_reviewer"}
+#
+# 'rejected' is deliberately absent. It used to carry two incompatible meanings
+# the system could not tell apart, and it was split by migration 005 into:
+#   'dismissed' — a false positive; the text is not sensitive and stays.
+#   'retained'  — a real identifier the reviewer chose to leave unredacted.
+# Nothing writes 'rejected' any more, so a row still carrying it is an
+# unrecognised value, which the fail-closed logic below treats as unresolved and
+# therefore blocking. That is the safe direction and it is intentional.
+FINDING_REVIEW_STATUSES = {"pending", "approved", "dismissed", "retained", "added_by_reviewer"}
+
+# The only review statuses whose sensitive text is actually removed from the
+# exported document — redaction_targets_for_document() in app.py builds its
+# target list from exactly these two. Every other status leaves the text in the
+# output: 'dismissed'/'retained' are terminal for review purposes but the text
+# stays either way, and 'pending'/NULL/an unrecognized value was never acted on
+# at all.
+REDACTED_REVIEW_STATUSES = {"approved", "added_by_reviewer"}
+
+# Statuses that mean "this finding no longer counts against release", either
+# because its text is gone from the export (approved/added_by_reviewer) or
+# because the reviewer judged it not sensitive in the first place (dismissed).
+# 'retained' is absent on purpose: the reviewer resolved it, but a real
+# identifier is still sitting in the exported document. Both release-side
+# measurements in review_gate_counts() (app.py) take the complement of this set,
+# so they fail closed on NULL, 'pending', and any unrecognised value:
+#   * the remaining-findings set feeding the residual-risk recompute, i.e.
+#     unresolved ∪ retained;
+#   * direct_identifiers_remaining, i.e. pending ∪ retained — a retained direct
+#     identifier literally remains, which is what that gate condition asks.
+RELEASE_CLEARED_REVIEW_STATUSES = {"approved", "added_by_reviewer", "dismissed"}
+
+# Statuses that count as "the reviewer has made a decision about this finding",
+# used by the workflow gates that ask whether a document is fully reviewed
+# (mark_redacted in blueprints/review.py, get_exportable_docx in app.py).
+# 'retained' belongs here — it is a decision, not an omission — and it is caught
+# on the release side by RELEASE_CLEARED_REVIEW_STATUSES instead.
+RESOLVED_REVIEW_STATUSES = {"approved", "dismissed", "retained", "added_by_reviewer"}
 
 
 @dataclass(frozen=True)
@@ -194,6 +230,49 @@ def finding_explanations() -> dict[str, object]:
     }
 
 
+# The catch-all court/authority rule. It fires on a bare institution SUFFIX
+# ("Mahkemesi", "Hakimliği", "Noterliği", "Savcılığı") and then sweeps up to 120
+# characters of the clause that follows, because the institution's own name is
+# not part of the trigger. That is deliberate -- it is the only rule that sees
+# an unnumbered or unfamiliar authority -- but it means that wherever one of the
+# specific court rules below has already matched the full institution name, this
+# rule reports a second, worse copy of the same institution starting at the
+# suffix: "11. Aile Mahkemesi" reported again as "Mahkemesi Sayın Hakimliğine",
+# "7. İş Mahkemesi" again as "Mahkemesi kararının temyiz incelemesinde, davacı
+# işçi Hasan Demirci'nin" -- a fragment that carries no institution name and
+# stores an unrelated person's name in the finding sample.
+#
+# _generic_court_matches() therefore skips a match of THIS rule that begins
+# inside a span one of the name-anchored rules already matched, and resumes the
+# scan at the END of that enclosing span rather than at the end of the skipped
+# match. What is guaranteed as a result:
+#
+#   * a name-anchored court is never suppressed;
+#   * the START of every authority mention lies inside at least one finding
+#     span -- its own, or the name-anchored finding that encloses it -- so the
+#     place name and institution stem can always be approved and redacted.
+#     Not the whole mention: the Yargıtay/Danıştay rule's fixed 60-character
+#     sweep can end mid-word, and the resume then lands where \b cannot match,
+#     so the TAIL of that word ("lığına" of "Başsavcılığına") can fall outside
+#     every finding. Measured on 15,000 adversarial sentences: 0 whole misses,
+#     664 such tail fragments, none carrying an identifier.
+#
+# The resume is the load-bearing half. Dropping the match and letting
+# re.finditer() continue is NOT equivalent: finditer is non-overlapping, so the
+# scan would restart after the discarded 120-character match and any second,
+# genuinely distinct authority inside it would never be offered again. That left
+# "Kadıköy Cumhuriyet Başsavcılığı'na" with no finding of any kind in
+# "İstanbul Anadolu 4. Asliye Ceza Mahkemesi kararı Kadıköy Cumhuriyet
+# Başsavcılığı'na gönderilmiştir" -- and a span with no finding cannot be
+# approved by a reviewer, so it is unredactable on export by construction.
+GENERIC_COURT_SUFFIX_RULE = DetectionRule(
+    "court_or_authority",
+    r"\b(?:UYAP|cumhuriyet başsavcılığı|cumhuriyet bassavciligi|mahkemesi|savcılığı|savciligi|hakimliği|hakimligi|hâkimliği|noterliği|noterligi|valiliği|valiligi|kaymakamlığı|kaymakamligi|[İi]cra müdürlüğü|icra mudurlugu|ticaret sicili? müdürlüğü|ticaret sicili? mudurlugu|bölge adliye|bolge adliye|türk patent|turkpatent|kurumu)\b[^.\n]{0,120}",
+    "HIGH",
+    "Replace with consistent pseudonym or generalize",
+    "COURT_AUTHORITY",
+)
+
 DETECTION_RULES = [
     DetectionRule("email_address", r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "HIGH", "Replace with consistent pseudonym", "EMAIL"),
     DetectionRule("phone_number", r"(?<!\d)(?:\+90|0)?\s?(?:5\d{2}|2\d{2}|3\d{2}|4\d{2})[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)", "HIGH", "Replace with consistent pseudonym", "PHONE"),
@@ -225,7 +304,20 @@ DETECTION_RULES = [
     # accuracy-audit note above `DETECTION_RULES` before loosening this.
     DetectionRule("vehicle_plate", r"\b(?:plaka(?:sı|si)?\s*(?:no(?:su)?)?[:\s]*\d{2}\s?[A-ZÇĞİÖŞÜ]{1,3}\s?\d{2,4}|\d{2}\s?[A-ZÇĞİÖŞÜ]{1,3}\s?\d{2,4}\s+plaka(?:lı|li|sı|si)?)\b", "HIGH", "Replace with consistent pseudonym", "VEHICLE_PLATE"),
     DetectionRule("case_or_investigation_number", r"\b(?:soruşturma|sorusturma|kovuşturma|kovusturma|esas|karar|dosya|takip|yevmiye|talimat|değişik iş|degisik is|UYAP)\s*(?:no|numarası|numarasi)?[:\s]*[0-9]{4}\s*/\s*[0-9A-Za-z.-]+\b", "HIGH", "Replace with consistent pseudonym", "CASE_NUMBER"),
-    DetectionRule("address", r"(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2}\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu|beşiktaş|besiktas|ümraniye|umraniye|[İi]stanbul)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
+    # Triggered on address *structure* words (street/neighbourhood/building/
+    # district), never on a bare place name. The trigger list used to carry
+    # "İstanbul", "Beşiktaş" and "Ümraniye"; those fired on a city or district
+    # mentioned in running text and then swallowed 140 characters of whatever
+    # followed, so "İstanbul 7. İş Mahkemesi kararının temyiz incelemesinde,
+    # davacı işçi Hasan Demirci'nin" was reported as an address. A place name on
+    # its own is not an address -- it does not narrow anyone down -- and every
+    # address in the gold set is anchored on a structure word whose trailing
+    # span already sweeps up the district and city that follow it ("Bağdat
+    # Caddesi No: 41 Daire: 7 Maltepe"). Dropping the three place names removed
+    # 8 false positives with gold-set recall held at 1.0. Accepted cost: an
+    # address written as a bare "Beşiktaş / İstanbul", with no street or
+    # neighbourhood, is no longer flagged as an address.
+    DetectionRule("address", r"(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2}\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
     DetectionRule("date", r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", "MEDIUM", "Generalize unless legally necessary", "DATE"),
     DetectionRule("money_amount", r"\b(?:USD|EUR|TRY|TL|₺|\$|€)\s?\d[\d.,]*|\b\d[\d.,]*\s?(?:USD|EUR|TRY|TL|₺|dolar|euro)\b", "MEDIUM", "Generalize or keep if legally necessary", "AMOUNT"),
     DetectionRule("health_data", r"\b(?:sağlık|saglik|hasta|hastane|cerrahi|tedavi|teşhis|teshis|reçete|recete|medical|health|patient)\b[^.\n]{0,120}", "CRITICAL", "Flag for human legal review", "SENSITIVE_HEALTH_DATA"),
@@ -244,7 +336,7 @@ DETECTION_RULES = [
     # and no identifier. It also stops party_role samples from storing a party's
     # name and national id in cleartext.
     DetectionRule("party_role", r"\b(?:davacı|davaci|davalı|davali|müşteki|musteki|şikayetçi|sikayetci|şüpheli|supheli|sanık|sanik|katılan|katilan|borçlu|borclu|alacaklı|alacakli|mağdur|magdur|tanık|tanik|müdahil|mudahil)\b", "MEDIUM", "Review party-role context for re-identification risk", "PARTY_ROLE"),
-    DetectionRule("court_or_authority", r"\b(?:UYAP|cumhuriyet başsavcılığı|cumhuriyet bassavciligi|mahkemesi|savcılığı|savciligi|hakimliği|hakimligi|hâkimliği|noterliği|noterligi|valiliği|valiligi|kaymakamlığı|kaymakamligi|[İi]cra müdürlüğü|icra mudurlugu|ticaret sicili? müdürlüğü|ticaret sicili? mudurlugu|bölge adliye|bolge adliye|türk patent|turkpatent|kurumu)\b[^.\n]{0,120}", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
+    GENERIC_COURT_SUFFIX_RULE,
     DetectionRule("court_or_authority", r"\b\d{1,2}\.\s*(?:Asliye|Ağır\s+Ceza|Agir\s+Ceza|Sulh|İdare|Idare|Ticaret|İş|Is|Aile|İcra|Icra|Hukuk|Ceza|Vergi)(?:\s+(?:Hukuk|Ceza|Ticaret|İş|Is|Aile|Mahkemesi|Dairesi|Müdürlüğü|Mudurlugu|Hakimliği|Hakimligi)){1,3}\b", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
     DetectionRule("court_or_authority", r"\b\d{1,2}\.\s*Noterli[ğg]i\b", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
     DetectionRule("court_or_authority", r"\b(?:Yargıtay|Yargitay|Danıştay|Danistay|Anayasa\s+Mahkemesi|Bölge\s+Adliye\s+Mahkemesi|Bolge\s+Adliye\s+Mahkemesi|Bölge\s+İdare\s+Mahkemesi|Bolge\s+Idare\s+Mahkemesi)\b[^.\n]{0,60}", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
@@ -262,6 +354,69 @@ ROLE_PERSON_RE = re.compile(
     r"\s+(?:[a-zçğıöşü]+\s+)?"
     r"([A-ZÇĞİÖŞÜ][a-zçğıöşü'\-]+(?:\s+[A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ'\-]+){1,2})"
 )
+
+
+def _named_court_spans(text: str) -> list[tuple[int, int]]:
+    """Spans matched by the court rules that begin at the institution's name.
+
+    Every court_or_authority rule except GENERIC_COURT_SUFFIX_RULE *starts* on
+    the institution name ("11. Aile Mahkemesi", "24. Noterliği", "Yargıtay"),
+    which is what makes it safe for the generic suffix rule to yield to them.
+    They do not all END there: the Yargıtay/Danıştay rule carries a
+    `[^.\\n]{0,60}` sweep, so its span can run 60 characters past the name and
+    over a following institution. That only widens the window the generic rule
+    skips -- it never suppresses another name-anchored rule -- and the skipped
+    text stays covered by the Yargıtay finding itself.
+    """
+    spans = []
+    for rule in DETECTION_RULES:
+        if rule.category != "court_or_authority" or rule is GENERIC_COURT_SUFFIX_RULE:
+            continue
+        for match in re.finditer(rule.pattern, text, rule.flags):
+            spans.append((match.start(), match.end()))
+    return spans
+
+
+def _enclosing_span_end(start: int, spans: list[tuple[int, int]]) -> int | None:
+    """End of the narrowest span in `spans` that strictly contains `start`.
+
+    Strictly: a match starting at exactly the same offset as a span is a
+    competing reading of the same text, not a fragment of it, and is kept so
+    _dedupe_findings and build_redacted_preview can rank the two on risk.
+
+    Narrowest or widest is inconsequential: if two spans both strictly contain
+    `start`, every offset between their ends is still strictly inside the wider
+    one and is skipped again on the next iteration, so both choices reach the
+    same resume point. min() is used for determinism; a min->max mutation is an
+    equivalent mutant (verified: identical findings on a 15,000-sentence fuzz).
+    """
+    ends = [span_end for span_start, span_end in spans if span_start < start < span_end]
+    return min(ends) if ends else None
+
+
+def _generic_court_matches(text: str, named_spans: list[tuple[int, int]]):
+    """Yield GENERIC_COURT_SUFFIX_RULE matches that are not a named court's tail.
+
+    Resumes at the end of the enclosing named span instead of the end of the
+    skipped match, so an authority mentioned inside the skipped 120-character
+    span is still offered its own finding. See the note on
+    GENERIC_COURT_SUFFIX_RULE for why dropping the match outright is not
+    equivalent. Terminates because every resume offset is strictly greater than
+    the start of the match that produced it, which is itself at or after the
+    previous offset.
+    """
+    pattern = re.compile(GENERIC_COURT_SUFFIX_RULE.pattern, GENERIC_COURT_SUFFIX_RULE.flags)
+    position = 0
+    while True:
+        match = pattern.search(text, position)
+        if match is None:
+            return
+        enclosing_end = _enclosing_span_end(match.start(), named_spans)
+        if enclosing_end is None:
+            yield match
+            position = match.end()
+        else:
+            position = enclosing_end
 
 
 def classify_document_context(filename: str, text: str) -> dict:
@@ -287,9 +442,14 @@ def analyze_privacy(
     findings = []
     placeholder_state: dict[tuple[str, str], str] = {}
     counters: Counter[str] = Counter()
+    named_court_spans = _named_court_spans(text)
 
     for rule in DETECTION_RULES:
-        for match in re.finditer(rule.pattern, text, rule.flags):
+        if rule is GENERIC_COURT_SUFFIX_RULE:
+            matches = _generic_court_matches(text, named_court_spans)
+        else:
+            matches = re.finditer(rule.pattern, text, rule.flags)
+        for match in matches:
             value = match.group(1).strip() if rule.category == "turkish_national_id" and match.lastindex else match.group(0).strip()
             if not value:
                 continue
@@ -519,6 +679,33 @@ def residual_risk_assessment(findings: list[dict], text: str, extraction_status:
     }
 
 
+def remaining_findings_residual_risk(remaining_findings: list[dict], extraction_status: dict) -> dict:
+    """Residual risk over only the sensitive text that still remains in the output.
+
+    `remaining_findings` is every finding whose review_status is NOT in
+    RELEASE_CLEARED_REVIEW_STATUSES, i.e. (unresolved findings) ∪ (retained
+    findings). A retained CRITICAL national id is resolved for review purposes
+    but is still in the document, so it must keep the residual level above Low.
+    A dismissed finding is excluded: the reviewer judged it a false positive, so
+    its text remaining in the output is not residual risk at all — including it
+    would put the release gate back out of reach for every document with a
+    CRITICAL-risk false positive, which is the dead end this split exists to
+    remove.
+
+    The contextual-signal half of residual_risk_assessment() is measured over
+    the remaining findings' samples rather than the full source text. At
+    detection time those tokens ("adres", "mahkemesi", "tarih", …) are a proxy
+    for "this document contains quasi-identifiers we may not have caught"; once
+    every finding has been adjudicated, the finding set is the direct evidence
+    and the bare label words that survive redaction are not identifiers. Scoring
+    the source text here would also leave the gate permanently closed on any
+    document containing the word "tarih", with no action a reviewer could take
+    to satisfy it.
+    """
+    remaining_text = "\n".join(finding.get("sample") or "" for finding in remaining_findings)
+    return residual_risk_assessment(remaining_findings, remaining_text, extraction_status)
+
+
 def has_direct_identifiers(findings: list[dict]) -> bool:
     return any(f["category"] in DIRECT_IDENTIFIER_CATEGORIES for f in findings)
 
@@ -641,9 +828,21 @@ def refresh_release_state(
     auto_mode_enabled: bool = False,
     unresolved_critical_count: int | None = None,
     direct_identifiers_remaining: bool | None = None,
+    remaining_findings: list[dict] | None = None,
     ocr_status: str = "not_required",
 ) -> dict:
-    """Re-evaluate release controls without rerunning detection."""
+    """Re-evaluate release controls without rerunning detection.
+
+    `remaining_findings` carries the review outcome the stored profile cannot
+    know: the findings whose sensitive text is still in the document (see
+    remaining_findings_residual_risk). When it is supplied, residual risk is
+    recomputed from it — reusing the stored, detection-time value instead froze
+    residual risk at its pre-review level and made the gate's "Residual risk
+    must be Low" condition unsatisfiable for every document that had any
+    CRITICAL finding. An empty list is a valid answer ("nothing remains"); only
+    None means the caller could not supply the data, and then the stored value
+    is kept rather than assumed Low.
+    """
     findings = privacy_profile.get("risk_map", [])
     extraction_status = privacy_profile.get("extraction_status", extraction_status_for("", "Missing extraction status."))
     residual_risk = privacy_profile.get(
@@ -655,6 +854,8 @@ def refresh_release_state(
             "extraction_gated": True,
         },
     )
+    if remaining_findings is not None:
+        residual_risk = remaining_findings_residual_risk(remaining_findings, extraction_status)
     context = privacy_profile.get("document_context", {})
     gate = external_llm_gate_policy(
         residual_risk,
@@ -670,6 +871,10 @@ def refresh_release_state(
 
     privacy_profile["external_llm_gate"] = gate
     privacy_profile["external_llm_readiness"] = gate["decision"]
+    # The level the gate was actually decided against, recorded separately so
+    # that "residual_risk" stays the detection-time measurement the accuracy
+    # audit and the risk badges are calibrated on.
+    privacy_profile["post_review_residual_risk"] = residual_risk
     privacy_profile["redaction_status"] = redaction_status(findings, extraction_status, redaction_completed, ocr_status)
     privacy_profile["human_review_required"] = human_review_required(gate, residual_risk, findings, extraction_status, context)
     privacy_profile["release_controls"] = {

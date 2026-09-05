@@ -36,23 +36,10 @@ class SecretKeyTests(unittest.TestCase):
         module = self.reload_under({"LEGAL_ANALYZER_SECRET_KEY": "configured-key-from-env"})
         self.assertEqual(module.app.secret_key, "configured-key-from-env")
 
-    def test_unset_key_is_ephemeral_not_a_shared_default(self) -> None:
-        """Two processes with no key configured must not agree on one.
-
-        The failure this guards is a hardcoded fallback: every reader of the
-        source could forge a session cookie signed with it.
-        """
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LEGAL_ANALYZER_SECRET_KEY", None)
-            first = reload_app().app.secret_key
-            second = reload_app().app.secret_key
-
-        self.assertNotEqual(first, second)
-        self.assertGreaterEqual(len(first), 32)
-
-    def test_blank_key_is_treated_as_unset(self) -> None:
-        module = self.reload_under({"LEGAL_ANALYZER_SECRET_KEY": "   "})
-        self.assertNotIn(module.app.secret_key.strip(), {"", "local-dev-secret-change-before-production"})
+    # An unset or blank key is a startup failure, not an ephemeral key — see
+    # tests/test_app_config.py (unset, blank, and the subprocess import) for the
+    # fail-fast guards. Two designs for this shipped on separate branches; the
+    # refuse-to-start one won when they were reconciled, superseding ADR-007.
 
     def test_no_hardcoded_fallback_survives_in_the_source(self) -> None:
         source = (app_module.PROJECT_DIR / "app.py").read_text(encoding="utf-8")
@@ -98,7 +85,7 @@ class SessionCookieTests(unittest.TestCase):
 
     def test_httponly_and_samesite_are_set(self) -> None:
         self.assertTrue(app_module.app.config["SESSION_COOKIE_HTTPONLY"])
-        self.assertEqual(app_module.app.config["SESSION_COOKIE_SAMESITE"], "Lax")
+        self.assertEqual(app_module.app.config["SESSION_COOKIE_SAMESITE"], "Strict")
 
     def test_secure_defaults_off_so_local_http_login_works(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):

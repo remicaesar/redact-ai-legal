@@ -40,7 +40,13 @@ from legal_analyzer.docx_redactor import RedactionTarget
 from legal_analyzer.extraction import extract_text
 from legal_analyzer.ocr import OCRToken, token_regions_for_sample
 from legal_analyzer.pdf_redactor import PdfRegion
-from legal_analyzer.privacy import DIRECT_IDENTIFIER_CATEGORIES, analyze_privacy, refresh_release_state
+from legal_analyzer.privacy import (
+    DIRECT_IDENTIFIER_CATEGORIES,
+    RELEASE_CLEARED_REVIEW_STATUSES,
+    RESOLVED_REVIEW_STATUSES,
+    analyze_privacy,
+    refresh_release_state,
+)
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -57,43 +63,70 @@ UPLOAD_DIR = PROJECT_DIR / "data" / "uploads"
 EXPORT_DIR = PROJECT_DIR / "data" / "exports"
 READY_DB_PATHS: set[Path] = set()
 
-def resolve_secret_key() -> str:
-    """Return the session signing key, without a hardcoded fallback.
+SECRET_KEY_ENV_VAR = "LEGAL_ANALYZER_SECRET_KEY"
 
-    The key that signs the session cookie is the only thing between a stranger
-    and an admin session, so a default committed to a public repository is a
-    published credential, not a convenience. Without LEGAL_ANALYZER_SECRET_KEY
-    each process generates its own ephemeral key: sessions then do not survive a
-    restart and do not work across workers. Both are loud, local failures, which
-    is the safe direction for a key guarding document access — and setting the
-    env var fixes both.
+# Ceiling on a request body, matching the ceiling the ZIP extractor is willing
+# to read back (ZIP_MAX_TOTAL_BYTES), so an upload cannot claim more disk than
+# extraction will process. blueprints/documents.py checks the received file
+# size against this same number, so an oversized upload is audited instead of
+# surfacing as a bare Werkzeug 413.
+MAX_UPLOAD_BYTES = int(os.environ.get("LEGAL_ANALYZER_MAX_UPLOAD_BYTES", "100000000"))
+
+# Characters that let stored free text (an uploaded filename, a reviewer's
+# replacement text) break out of an HTML attribute or text node in the
+# templates that render it. static/escape.js escapes them at render time; they
+# are also kept out of the database at the write, so a stored value cannot rely
+# on a single call site remembering to escape.
+UNSAFE_HTML_CHARS = "\"'<>"
+
+
+def strip_unsafe_html_chars(value: str) -> str:
+    return "".join(char for char in value if char not in UNSAFE_HTML_CHARS)
+
+
+def has_unsafe_html_chars(value: str) -> bool:
+    return any(char in UNSAFE_HTML_CHARS for char in value)
+
+
+def resolve_secret_key() -> str:
+    """Return the Flask session secret, or refuse to start without one.
+
+    This used to fall back to a hard-coded default that shipped in the
+    repository. Session cookies are signed with this value, so anyone holding
+    the published default could mint a cookie for any user id and role — an
+    admin session was forgeable from a checkout. There is no safe default, so
+    an unset key is a startup failure rather than a warning: a process that
+    refuses to boot cannot serve a forgeable session, whereas a per-process
+    ephemeral key leaves a running app whose sessions silently disagree across
+    gunicorn workers. Supersedes ADR-007.
     """
-    configured = os.environ.get("LEGAL_ANALYZER_SECRET_KEY", "").strip()
-    if configured:
-        return configured
-    print(
-        "WARNING: LEGAL_ANALYZER_SECRET_KEY is not set. Using an ephemeral key — "
-        "sessions will not survive a restart and will not work across workers. "
-        "Set it before serving this app to anyone but yourself.",
-        file=sys.stderr,
-    )
-    return secrets.token_hex(32)
+    secret = os.environ.get(SECRET_KEY_ENV_VAR, "").strip()
+    if not secret:
+        raise SystemExit(
+            f"{SECRET_KEY_ENV_VAR} is not set.\n"
+            "Session cookies are signed with it, so there is no safe default: a known key lets\n"
+            "anyone forge an admin session. Generate one and put it in your environment or .env:\n"
+            '  python3 -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    return secret
 
 
 app = Flask(__name__)
 app.secret_key = resolve_secret_key()
 
-# Cap request bodies at the ceiling the ZIP extractor already enforces
-# (ZIP_MAX_TOTAL_BYTES), so an upload cannot claim more disk than extraction is
-# willing to read back. Werkzeug aborts with 413 past this.
-app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("LEGAL_ANALYZER_MAX_UPLOAD_BYTES", "100000000"))
+# Werkzeug aborts with 413 past this; blueprints/documents.py checks the same
+# ceiling first so the rejection is audited rather than opaque.
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
-# Session cookie hardening. Secure is opt-in rather than on by default because
-# the documented local setup is plain http on 127.0.0.1, where a Secure cookie
-# is never sent and login would fail with no visible reason. Any deployment
-# behind TLS should set LEGAL_ANALYZER_HTTPS=1.
+# Session cookie hardening. SameSite=Strict because nothing legitimately
+# navigates into this app from another site; CSRF protection is enforced
+# independently (ADR-008) rather than relying on the browser default. Secure is
+# opt-in rather than on by default because the documented local setup is plain
+# http on 127.0.0.1, where a Secure cookie is never sent and login would fail
+# with no visible reason. Any deployment behind TLS should set
+# LEGAL_ANALYZER_HTTPS=1.
 app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SAMESITE"] = "Strict"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("LEGAL_ANALYZER_HTTPS", "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -174,8 +207,8 @@ def submitted_csrf_token() -> str:
 def csrf_protect():
     """Reject state-changing requests that do not carry the session's token.
 
-    SameSite=Lax already blocks the common cross-site POST, but it is a browser
-    default, not a property of this app: it does nothing for an older browser,
+    SameSite=Strict already blocks the cross-site POST, but it is a browser
+    behaviour, not a property of this app: it does nothing for an older browser,
     and nothing for a sibling subdomain that can write the cookie. The token is
     the check that does not depend on either.
 
@@ -627,8 +660,10 @@ def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]
         blockers.append("OCR output must be accepted or not required before PDF redaction export.")
     if not doc["redaction_completed"]:
         blockers.append("Redaction must be marked complete before reviewed PDF export.")
-    if not doc["human_review_approved"]:
-        blockers.append("Human review approval is required before reviewed PDF export.")
+    if not (doc["human_review_approved"] or doc["auto_mode_enabled"]):
+        blockers.append(
+            "Human review approval is required before reviewed PDF export unless explicit auto-mode is enabled."
+        )
     pending_regions = conn.execute(
         "SELECT COUNT(*) FROM pdf_redaction_regions WHERE document_id = ? AND review_status = 'pending'",
         (doc_id,),
@@ -637,14 +672,24 @@ def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]
         "SELECT COUNT(*) FROM pdf_redaction_regions WHERE document_id = ? AND review_status = 'approved'",
         (doc_id,),
     ).fetchone()[0]
-    pending_findings = conn.execute(
-        "SELECT COUNT(*) FROM privacy_findings WHERE document_id = ? AND review_status = 'pending'",
-        (doc_id,),
+    # Fails closed the same way as review_gate_counts(): "not pending" is not
+    # the same question as "decided", and a NULL or unrecognised status (the
+    # pre-migration-005 'rejected' included) must block rather than pass.
+    undecided_findings = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM privacy_findings
+        WHERE document_id = ?
+          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
+        """,
+        (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
     ).fetchone()[0]
     if pending_regions:
         blockers.append("All PDF redaction boxes must be approved or rejected.")
-    if pending_findings:
-        blockers.append("All privacy findings must be approved or rejected before reviewed PDF export.")
+    if undecided_findings:
+        blockers.append(
+            "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
+            "retained unredacted — before reviewed PDF export."
+        )
     if not approved_regions:
         blockers.append("At least one approved PDF redaction box is required.")
     if (doc["ocr_status"] or "not_required") == "accepted":
@@ -692,6 +737,42 @@ def get_exportable_docx(conn: sqlite3.Connection, doc_id: int, audit_action: str
         return audited_error(conn, "Actual redacted export currently supports DOCX only.", 415, audit_action, doc_id)
     if not doc["redaction_completed"]:
         return audited_error(conn, "Redaction must be completed before actual redacted export.", 409, audit_action, doc_id)
+    # Same condition as the release gate's, which accepts explicit auto-mode in
+    # place of an approval (external_llm_gate_policy in privacy.py). Checking
+    # human_review_approved alone told an auto-mode user the document was
+    # "Allowed for external LLM use" while this endpoint answered 409.
+    if not (doc["human_review_approved"] or doc["auto_mode_enabled"]):
+        return audited_error(
+            conn,
+            "Human review approval is required before actual redacted export unless explicit auto-mode is enabled.",
+            409,
+            audit_action,
+            doc_id,
+        )
+    # redaction_completed is a latch: reverting a finding to 'pending' (via
+    # /api/finding/<id>/review) does not clear it, and only the OCR/reset
+    # transitions do. redaction_targets_for_document() then drops that finding
+    # from the target list, so it was never redacted and the exported DOCX
+    # carried it in cleartext while both gates above still read as satisfied.
+    # Re-check the findings themselves, the way pdf_export_blockers() does.
+    unreviewed_findings = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM privacy_findings
+        WHERE document_id = ?
+          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
+        """,
+        (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
+    ).fetchone()[0]
+    if unreviewed_findings:
+        return audited_error(
+            conn,
+            "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
+            "retained unredacted — before actual redacted export.",
+            409,
+            audit_action,
+            doc_id,
+            {"unreviewed_findings": unreviewed_findings},
+        )
     return doc
 
 
@@ -710,6 +791,58 @@ def redaction_targets_for_document(conn: sqlite3.Connection, doc_id: int) -> lis
             (doc_id,),
         ).fetchall()
     ]
+
+
+def sensitive_samples_for_document(conn: sqlite3.Connection, doc_id: int) -> list[str]:
+    """Every finding sample whose presence in the export would be unexpected.
+
+    This is deliberately wider than redaction_targets_for_document(): export QA
+    that measures leakage only against the targets it was handed cannot see a
+    finding that was never made a target, so a finding reverted to 'pending'
+    after redaction was marked complete leaked in cleartext with
+    leakage_count 0 and overall_status "pass".
+
+    Both terminal "the text stays" decisions are excluded, because for both of
+    them the text remaining is the expected outcome rather than a leak:
+    'dismissed' (a false positive) and 'retained' (a real identifier the
+    reviewer chose to leave in). Retained findings are counted separately by
+    retained_sample_count_for_document() so the QA report can say how many
+    identifiers were deliberately kept instead of reporting a bare pass.
+    """
+    return [
+        row["sample"]
+        for row in conn.execute(
+            """
+            SELECT sample
+            FROM privacy_findings
+            WHERE document_id = ?
+              AND COALESCE(review_status, 'pending') NOT IN ('dismissed', 'retained')
+              AND sample IS NOT NULL
+              AND sample != ''
+            """,
+            (doc_id,),
+        ).fetchall()
+    ]
+
+
+def retained_sample_count_for_document(conn: sqlite3.Connection, doc_id: int) -> int:
+    """How many findings the reviewer deliberately left unredacted.
+
+    sensitive_samples_for_document() excludes these from the leakage set, so
+    without this count an export carrying a retained TCKN would report zero
+    leakage and nothing else — a clean-looking QA report for a document that
+    still contains a national ID. The count is surfaced in the QA report and
+    keeps its overall status off "pass".
+    """
+    return conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM privacy_findings
+        WHERE document_id = ?
+          AND COALESCE(review_status, 'pending') = 'retained'
+        """,
+        (doc_id,),
+    ).fetchone()[0]
 
 
 def format_size(size: int) -> str:
@@ -754,37 +887,64 @@ def build_docx(text: str) -> bytes:
 
 
 def review_gate_counts(conn: sqlite3.Connection, doc_id: int) -> dict:
-    """Count findings the release gate must still treat as unresolved.
+    """Gate inputs the stored privacy profile cannot know: the review outcome.
 
     Fails closed: a finding only counts as resolved when its review_status is
-    one of the known terminal states (approved/rejected/added_by_reviewer).
-    NULL, 'pending', and any unrecognized value (e.g. written directly via SQL,
-    or a value that slips past input validation in the future) all count as
-    unresolved rather than being silently dropped from the gate.
+    one of the known terminal states (RESOLVED_REVIEW_STATUSES). NULL,
+    'pending', and any unrecognized value (e.g. written directly via SQL, the
+    pre-migration-005 'rejected', or a value that slips past input validation in
+    the future) all count as unresolved rather than being silently dropped from
+    the gate.
+
+    unresolved_critical_count counts only genuinely unresolved findings:
+    'retained' is a decision, not an omission. A retained CRITICAL is caught by
+    the two measurements below instead.
+
+    "remaining_findings" and direct_identifiers_remaining are both the
+    complement of RELEASE_CLEARED_REVIEW_STATUSES, so both include 'retained':
+    the reviewer decided that identifier stays in the document, and
+    redaction_targets_for_document() therefore never redacts it. Residual risk
+    is recomputed from remaining_findings in refresh_release_state(). The two
+    are deliberately redundant for a retained direct identifier — the gate
+    condition "No direct identifiers may remain in detected findings" is true of
+    it on its own terms, and defence in depth here is cheap.
     """
     unresolved_critical_count = conn.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM privacy_findings
         WHERE document_id = ?
-          AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
+          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
           AND risk = 'CRITICAL'
         """,
-        (doc_id,),
+        (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
     ).fetchone()[0]
     direct_identifiers_remaining = conn.execute(
         f"""
         SELECT COUNT(*)
         FROM privacy_findings
         WHERE document_id = ?
-          AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
+          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RELEASE_CLEARED_REVIEW_STATUSES)})
           AND category IN ({','.join('?' for _ in DIRECT_IDENTIFIER_CATEGORIES)})
         """,
-        (doc_id, *sorted(DIRECT_IDENTIFIER_CATEGORIES)),
+        (doc_id, *sorted(RELEASE_CLEARED_REVIEW_STATUSES), *sorted(DIRECT_IDENTIFIER_CATEGORIES)),
     ).fetchone()[0] > 0
+    remaining_findings = [
+        {"category": row["category"], "risk": row["risk"], "sample": row["sample"]}
+        for row in conn.execute(
+            f"""
+            SELECT category, risk, sample
+            FROM privacy_findings
+            WHERE document_id = ?
+              AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RELEASE_CLEARED_REVIEW_STATUSES)})
+            """,
+            (doc_id, *sorted(RELEASE_CLEARED_REVIEW_STATUSES)),
+        ).fetchall()
+    ]
     return {
         "unresolved_critical_count": unresolved_critical_count,
         "direct_identifiers_remaining": direct_identifiers_remaining,
+        "remaining_findings": remaining_findings,
     }
 
 

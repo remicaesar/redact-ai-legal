@@ -13,14 +13,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export LEGAL_ANALYZER_ADMIN_PASSWORD="change-this-local-password"
-python3 db/init_db.py       # destructive: wipes and reseeds db/legal_documents.db (set KEEP_DB=1 to skip wipe)
+python3 db/init_db.py       # safe: keeps an existing db/legal_documents.db and tops it up
+python3 db/init_db.py --reset  # DESTRUCTIVE: prints row counts, then wipes and reseeds
 python3 db/migrate.py       # apply pending migrations to an existing db
 python3 classify.py         # scans DEFAULT_STOCK_DIR + extra files, populates the db
 python3 app.py
 ```
 
-App runs at `http://127.0.0.1:5000` (the `.claude/launch.json` config runs it on port 5001 instead, with `LEGAL_ANALYZER_ADMIN_PASSWORD=<your-local-password>`). The first local admin user is created from `LEGAL_ANALYZER_ADMIN_USERNAME` (default `admin`) / `LEGAL_ANALYZER_ADMIN_PASSWORD` env vars on first DB connection (`bootstrap_admin_from_env` in `app.py`).
-
+App runs at `http://127.0.0.1:5000` (the `.claude/launch.json` config runs it on port 5001 instead, with `LEGAL_ANALYZER_ADMIN_PASSWORD=<a strong local password>`). The first local admin user is created from `LEGAL_ANALYZER_ADMIN_USERNAME` (default `admin`) / `LEGAL_ANALYZER_ADMIN_PASSWORD` env vars on first DB connection (`bootstrap_admin_from_env` in `app.py`).
 
 ### Database migrations
 
@@ -28,7 +28,7 @@ Migrations are plain `.sql` files in `db/migrations/`, applied in filename-sort 
 
 ## Tests
 
-Tests use `unittest`, not pytest (no pytest in `requirements.txt`). Each test file is runnable directly:
+Tests use `unittest`, not pytest (no pytest in `requirements.txt`). Each test file is run via `python -m unittest tests.<module>` (direct `python tests/x.py` fails with ModuleNotFoundError):
 
 ```bash
 python3 -m unittest tests.test_app_workflow
@@ -51,7 +51,7 @@ python3 benchmark.py --limit 25 --api-iterations 5                 # fast smoke 
 python3 benchmark.py --api-iterations 1000 --api-concurrency 50    # local concurrency check (still not real load testing)
 ```
 
-`gold/` holds the synthetic gold-label set (14 documents, 97 required labels) used to validate the Turkish/English PII detection rules — extend it with real labeled documents before trusting it for production accuracy claims.
+`gold/` holds the synthetic gold-label set (17 documents, 117 required labels) used to validate the Turkish/English PII detection rules — extend it with real labeled documents before trusting it for production accuracy claims.
 
 ## Architecture
 

@@ -22,8 +22,10 @@ from app import (
     redaction_targets_for_document,
     require_roles,
     resolve_document_path,
+    retained_sample_count_for_document,
     reviewed_pdf_regions,
     save_redacted_pdf_artifact_file,
+    sensitive_samples_for_document,
 )
 from legal_analyzer.docx_quality import analyze_docx_export_quality
 from legal_analyzer.docx_redactor import redact_docx
@@ -183,6 +185,14 @@ def api_document_redacted_export_qa(doc_id: int):
             for key in ("pending", "approved", "rejected")
         }
         artifact = latest_redacted_pdf_artifact(conn, doc_id)
+        # Same argument as the DOCX QA below: leakage measured only against the
+        # approved regions cannot see a finding no region covers, so a second
+        # occurrence of the same identifier elsewhere in the PDF was never
+        # searched for at all. Retained/dismissed findings are excluded by
+        # sensitive_samples_for_document, since for those the text remaining is
+        # the expected outcome.
+        pdf_sensitive_samples = sensitive_samples_for_document(conn, doc_id)
+        pdf_retained_count = retained_sample_count_for_document(conn, doc_id)
         audit_and_commit(conn, "export.redacted_pdf_qa", document_id=doc_id, metadata={"region_count": len(regions), "style": "black_box"})
         conn.close()
 
@@ -196,7 +206,15 @@ def api_document_redacted_export_qa(doc_id: int):
         else:
             data = redact_pdf(source_path, regions)
             qa_target = "freshly_generated"
-        report = analyze_pdf_redaction_quality(source_path, data, regions, region_state=region_state, qa_target=qa_target)
+        report = analyze_pdf_redaction_quality(
+            source_path,
+            data,
+            regions,
+            region_state=region_state,
+            qa_target=qa_target,
+            sensitive_samples=pdf_sensitive_samples,
+            retained_count=pdf_retained_count,
+        )
         report["document_id"] = doc_id
         artifact_conn = get_db()
         artifact_conn.execute(
@@ -205,7 +223,16 @@ def api_document_redacted_export_qa(doc_id: int):
             SET verification_status = ?
             WHERE document_id = ?
             """,
-            ("redacted_verified" if report["leakage_count"] == 0 else "qa_warning", doc_id),
+            # Same reason as the DOCX path below: a retained finding produces no
+            # leakage by construction, so keying this off leakage_count alone
+            # stamped "Verified redacted (QA passed)" on a PDF whose reviewer
+            # chose to leave identifiers in it.
+            (
+                "redacted_verified"
+                if report["leakage_count"] == 0 and not report["retained_count"]
+                else "qa_warning",
+                doc_id,
+            ),
         )
         record_document_artifact(
             artifact_conn,
@@ -215,6 +242,7 @@ def api_document_redacted_export_qa(doc_id: int):
             metadata={
                 "overall_status": report["overall_status"],
                 "leakage_count": report["leakage_count"],
+                "retained_count": report["retained_count"],
                 "region_count": report["region_count"],
                 "qa_target": report["qa_target"],
                 "annotation_count": report["annotation_count"],
@@ -245,6 +273,13 @@ def api_document_redacted_export_qa(doc_id: int):
     if not isinstance(doc, sqlite3.Row):
         return doc
     targets = redaction_targets_for_document(conn, doc_id)
+    # Leakage is measured against every finding whose text remaining would be
+    # unexpected, not just the approved targets: a finding that was never made a
+    # target is exactly the one the redactor cannot have removed. Findings the
+    # reviewer deliberately retained are excluded from that set and counted
+    # separately, so the report states them instead of reading as a clean pass.
+    sensitive_samples = sensitive_samples_for_document(conn, doc_id)
+    retained_count = retained_sample_count_for_document(conn, doc_id)
     audit_and_commit(
         conn,
         "export.redacted_docx_qa",
@@ -258,7 +293,9 @@ def api_document_redacted_export_qa(doc_id: int):
         return jsonify({"error": f"Source DOCX was not found: {source_path}"}), 404
 
     data = redact_docx(source_path, targets, style=redaction_style)
-    report = analyze_docx_export_quality(source_path, data, targets)
+    report = analyze_docx_export_quality(
+        source_path, data, targets, sensitive_samples=sensitive_samples, retained_count=retained_count
+    )
     report["style"] = redaction_style
     report["format"] = "docx"
     report["document_id"] = doc_id
@@ -269,7 +306,13 @@ def api_document_redacted_export_qa(doc_id: int):
         SET verification_status = ?
         WHERE document_id = ?
         """,
-        ("redacted_verified" if report["leakage_count"] == 0 else "qa_warning", doc_id),
+        # A retained finding produces no leakage by construction, so keying this
+        # off leakage_count alone stamped "Verified redacted (QA passed)" on a
+        # document whose reviewer chose to leave identifiers in it.
+        (
+            "redacted_verified" if report["leakage_count"] == 0 and not report["retained_count"] else "qa_warning",
+            doc_id,
+        ),
     )
     record_document_artifact(
         artifact_conn,
@@ -279,6 +322,7 @@ def api_document_redacted_export_qa(doc_id: int):
         metadata={
             "overall_status": report["overall_status"],
             "leakage_count": report["leakage_count"],
+            "retained_count": report["retained_count"],
             "target_count": report.get("target_count", len(targets)),
         },
         export_style=redaction_style,

@@ -26,6 +26,9 @@ from legal_analyzer.privacy import analyze_privacy, refresh_release_state
 
 ocr_bp = Blueprint("ocr", __name__)
 
+# The tesseract language packs the setup instructions install.
+OCR_LANGUAGES = {"tur", "eng", "tur+eng"}
+
 
 @ocr_bp.route("/api/document/<int:doc_id>/ocr/queue", methods=["POST"])
 @require_roles("reviewer", "admin")
@@ -97,6 +100,18 @@ def api_ocr_run(doc_id: int):
             {"ocr_status": doc["ocr_status"]},
         )
 
+    # language is passed to the local tesseract command, so it is checked
+    # against the installed language packs instead of being forwarded as-is.
+    language = payload.get("language", "tur+eng")
+    if language not in OCR_LANGUAGES:
+        return audited_error(
+            conn,
+            f"Unsupported OCR language. Must be one of: {', '.join(sorted(OCR_LANGUAGES))}.",
+            400,
+            "ocr.run",
+            doc_id,
+        )
+
     conn.execute(
         """
         UPDATE documents
@@ -140,7 +155,7 @@ def api_ocr_run(doc_id: int):
                 if isinstance(page, dict) and (page.get("text") or "").strip()
             ]
         else:
-            pages = run_local_ocr(resolve_document_path(doc["filepath"]), payload.get("language", "tur+eng"))
+            pages = run_local_ocr(resolve_document_path(doc["filepath"]), language)
 
         if not pages:
             raise RuntimeError("OCR produced no reviewable text.")

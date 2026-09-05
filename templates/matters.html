@@ -70,6 +70,7 @@
             </main>
         </div>
     </div>
+    <script src="{{ url_for('static', filename='escape.js') }}"></script>
     <script>
         document.addEventListener('DOMContentLoaded', loadMatters);
 
@@ -108,7 +109,6 @@
             }
         }
 
-        function escapeHtml(value) { const div = document.createElement('div'); div.appendChild(document.createTextNode(String(value ?? ''))); return div.innerHTML; }
         async function logout() { await fetch('/logout', { method: 'POST' }); window.location.href = '/login'; }
     </script>
 </body>

@@ -11,6 +11,7 @@ from app import (
     audit_and_commit,
     audited_error,
     get_db,
+    has_unsafe_html_chars,
     ocr_blocks_redaction,
     record_document_artifact,
     refresh_document_state,
@@ -18,9 +19,37 @@ from app import (
     review_gate_counts,
 )
 from blueprints.documents import api_document_detail
-from legal_analyzer.privacy import CATEGORY_EXPLANATIONS, FINDING_REVIEW_STATUSES, RISK_ORDER, refresh_release_state
+from legal_analyzer.privacy import (
+    CATEGORY_EXPLANATIONS,
+    FINDING_REVIEW_STATUSES,
+    RESOLVED_REVIEW_STATUSES,
+    RISK_ORDER,
+    refresh_release_state,
+)
 
 review_bp = Blueprint("review", __name__)
+
+# What a reviewer's finding-level action writes to privacy_findings.review_status.
+#
+# 'reject' is kept as an alias for 'dismissed' so existing API clients do not
+# break. It maps to the permissive decision deliberately: before the split,
+# 'rejected' was overwhelmingly used to clear false positives, and mapping a
+# bare 'reject' to the blocking 'retained' would have silently changed what
+# every existing caller's request means. Choosing to keep a real identifier is
+# now an explicit action a caller has to name.
+FINDING_ACTION_STATUSES = {
+    "approve": "approved",
+    "dismiss": "dismissed",
+    "retain": "retained",
+    "reject": "dismissed",
+    "pending": "pending",
+}
+
+# replacement_text is reviewer free text that is written into the redacted
+# export and rendered back into the studio UI, including inside HTML
+# attributes. Reject the characters that break out of an attribute rather than
+# silently rewriting text that ends up in a legal document.
+UNSAFE_REPLACEMENT_TEXT_ERROR = "Replacement text must not contain quotes or angle brackets."
 
 
 @review_bp.route("/api/document/<int:doc_id>/review", methods=["POST"])
@@ -57,19 +86,22 @@ def api_document_review(doc_id: int):
         # Checking only "= 'pending'" would let a NULL or unrecognized status
         # (e.g. written directly via SQL) slip through unreviewed, flip
         # redaction_completed to True, and unblock export — findings must be
-        # actually resolved, not merely not-pending.
+        # actually resolved, not merely not-pending. 'retained' counts as
+        # reviewed here: it is a decision, and it blocks release through the
+        # residual-risk and direct-identifier paths, not through this gate.
         unreviewed = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM privacy_findings
             WHERE document_id = ?
-              AND COALESCE(review_status, 'pending') NOT IN ('approved', 'rejected', 'added_by_reviewer')
+              AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
             """,
-            (doc_id,),
+            (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
         ).fetchone()[0]
         if unreviewed:
             return audited_error(
                 conn,
-                "All findings must be approved or rejected before marking redaction complete.",
+                "Every finding must be decided — approved, dismissed as not sensitive, or retained "
+                "unredacted — before marking redaction complete.",
                 409,
                 f"document_review.{action}",
                 doc_id,
@@ -163,7 +195,8 @@ def api_document_review(doc_id: int):
             """
             SELECT
                 SUM(CASE WHEN review_status = 'approved' THEN 1 ELSE 0 END) AS approved_count,
-                SUM(CASE WHEN review_status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
+                SUM(CASE WHEN review_status = 'dismissed' THEN 1 ELSE 0 END) AS dismissed_count,
+                SUM(CASE WHEN review_status = 'retained' THEN 1 ELSE 0 END) AS retained_count,
                 SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
                 SUM(CASE WHEN risk = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_count
             FROM privacy_findings
@@ -179,7 +212,11 @@ def api_document_review(doc_id: int):
             metadata={
                 "review_status": review_status,
                 "approved_findings": finding_counts["approved_count"] or 0,
-                "rejected_findings": finding_counts["rejected_count"] or 0,
+                "dismissed_findings": finding_counts["dismissed_count"] or 0,
+                # The dangerous decision, on the permanent artifact timeline: a
+                # nonzero count here means the export carries identifiers a
+                # reviewer chose to leave in.
+                "retained_findings": finding_counts["retained_count"] or 0,
                 "pending_findings": finding_counts["pending_count"] or 0,
                 "critical_findings": finding_counts["critical_count"] or 0,
             },
@@ -194,7 +231,7 @@ def api_document_review(doc_id: int):
 def api_finding_review(finding_id: int):
     payload = request.get_json(silent=True) or {}
     action = payload.get("action")
-    if action not in {"approve", "reject", "pending", "update"}:
+    if action not in set(FINDING_ACTION_STATUSES) | {"update"}:
         return jsonify({"error": "Unsupported finding action"}), 400
 
     conn = get_db()
@@ -206,12 +243,11 @@ def api_finding_review(finding_id: int):
     review_status = finding["review_status"] or "pending"
     replacement_text = payload.get("replacement_text", finding["replacement_text"])
     reviewer_note = payload.get("reviewer_note", finding["reviewer_note"])
-    if action == "approve":
-        review_status = "approved"
-    elif action == "reject":
-        review_status = "rejected"
-    elif action == "pending":
-        review_status = "pending"
+    if replacement_text and has_unsafe_html_chars(str(replacement_text)):
+        conn.close()
+        return jsonify({"error": UNSAFE_REPLACEMENT_TEXT_ERROR}), 400
+    if action in FINDING_ACTION_STATUSES:
+        review_status = FINDING_ACTION_STATUSES[action]
     elif action == "update":
         requested_status = payload.get("review_status", review_status)
         if requested_status not in FINDING_REVIEW_STATUSES:
@@ -254,7 +290,7 @@ def api_finding_review(finding_id: int):
 def api_finding_batch_review(doc_id: int):
     payload = request.get_json(silent=True) or {}
     action = payload.get("action")
-    if action not in {"approve", "reject", "pending"}:
+    if action not in FINDING_ACTION_STATUSES:
         return jsonify({"error": "Unsupported batch finding action"}), 400
 
     conn = get_db()
@@ -295,7 +331,7 @@ def api_finding_batch_review(doc_id: int):
         return jsonify({"ok": True, "updated": 0})
 
     placeholders = ",".join("?" for _ in ids)
-    review_status = {"approve": "approved", "reject": "rejected", "pending": "pending"}[action]
+    review_status = FINDING_ACTION_STATUSES[action]
     conn.execute(
         f"UPDATE privacy_findings SET review_status = ? WHERE document_id = ? AND id IN ({placeholders})",
         (review_status, doc_id, *ids),
@@ -307,6 +343,10 @@ def api_finding_batch_review(doc_id: int):
         document_id=doc_id,
         metadata={
             "updated": len(ids),
+            # Recorded so a batch 'retain' — the one decision that leaves real
+            # identifiers in the export — is traceable in the audit log, and so
+            # the 'reject' alias's resolved status is visible rather than implied.
+            "review_status": review_status,
             "categories": categories,
             "risks": risks,
             "only_pending": only_pending,
@@ -335,6 +375,8 @@ def api_add_finding(doc_id: int):
         return jsonify({
             "error": f"Unsupported risk level '{risk}'. Must be one of: {', '.join(sorted(RISK_ORDER))}.",
         }), 400
+    if has_unsafe_html_chars(replacement_text):
+        return jsonify({"error": UNSAFE_REPLACEMENT_TEXT_ERROR}), 400
 
     conn = get_db()
     doc = conn.execute("SELECT id FROM documents WHERE id = ?", (doc_id,)).fetchone()

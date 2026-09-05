@@ -18,6 +18,11 @@ import secrets
 
 from flask.testing import FlaskClient
 
+# app.py refuses to import without LEGAL_ANALYZER_SECRET_KEY, and this package
+# imports it below — before any individual test module gets a chance to set the
+# variable itself. env_setup uses setdefault, so a real shell value still wins.
+import tests.env_setup  # noqa: F401  -- must precede "import app"
+
 import app as app_module
 
 

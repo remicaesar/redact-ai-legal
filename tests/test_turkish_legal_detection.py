@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -210,6 +211,144 @@ class TurkishLegalDetectionTests(unittest.TestCase):
         self.assertEqual(plates, [])
 
 
+class AddressPlaceNameTriggerTests(unittest.TestCase):
+    """The address rule triggers on address structure, never on a place name.
+
+    "İstanbul", "Beşiktaş" and "Ümraniye" used to be triggers in their own
+    right, so a city named in running text pulled in 140 characters of whatever
+    followed and reported a court, a bar association or a contract clause as an
+    address. Eight of the nine address false positives in the gold-set audit
+    came from that one alternative.
+    """
+
+    def addresses_for(self, text: str) -> list[str]:
+        return [f["sample"] for f in analyze_privacy("dilekce.txt", text)["risk_map"] if f["category"] == "address"]
+
+    def test_bare_city_name_in_running_text_is_not_an_address(self):
+        for text in (
+            "İstanbul 7. İş Mahkemesi kararının temyiz incelemesinde karar verilmiştir.",
+            "Sözleşme 04.11.2025 tarihinde İstanbul'da akdedilmiştir.",
+            "Vekil İstanbul Barosu'na kayıtlı Av. Selin Aydın tarafından temsil edilmektedir.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.addresses_for(text), [])
+
+    def test_street_address_is_still_detected_and_still_sweeps_up_the_city(self):
+        """The gold-set shape the place-name trigger was never needed for.
+
+        The structure word ("Caddesi") triggers, and its trailing span carries
+        the district and city that follow, so removing the place-name trigger
+        costs nothing here.
+        """
+        samples = self.addresses_for(
+            "Müvekkil Moda Caddesi Deniz Apartmanı No: 15 Daire: 4 Kadıköy İstanbul adresinde ikamet etmektedir."
+        )
+        self.assertEqual(len(samples), 1)
+        self.assertIn("Moda Caddesi Deniz Apartmanı No: 15", samples[0])
+        self.assertIn("Kadıköy İstanbul", samples[0])
+
+    def test_neighbourhood_and_street_address_is_still_detected(self):
+        samples = self.addresses_for("Borçlu Etlik Mahallesi Güven Sokak No: 3 Keçiören adresinde bulunmaktadır.")
+        self.assertEqual(len(samples), 1)
+        self.assertIn("Etlik Mahallesi Güven Sokak No: 3", samples[0])
+
+
+class CourtAuthoritySuffixSuppressionTests(unittest.TestCase):
+    """The generic court-suffix rule yields to a rule that matched the name.
+
+    GENERIC_COURT_SUFFIX_RULE fires on a bare suffix ("Mahkemesi",
+    "Noterliği") and sweeps the clause after it. Where a specific rule already
+    matched the whole institution, that produced a second, nameless copy of the
+    same court -- seven of the eleven gold-set court false positives.
+    """
+
+    def court_samples(self, text: str) -> list[str]:
+        return [f["sample"] for f in analyze_privacy("karar.txt", text)["risk_map"] if f["category"] == "court_or_authority"]
+
+    def test_generic_suffix_does_not_re_report_a_named_court(self):
+        samples = self.court_samples("İstanbul 11. Aile Mahkemesi Sayın Hakimliğine sunulmuştur.")
+        self.assertEqual(samples, ["11. Aile Mahkemesi"])
+
+    def test_generic_suffix_does_not_re_report_a_named_notary(self):
+        samples = self.court_samples("Beyoğlu 24. Noterliği'nde düzenlenmiştir.")
+        self.assertEqual(samples, ["24. Noterliği"])
+
+    def test_authority_with_no_specific_rule_is_still_reported(self):
+        samples = self.court_samples("Dosya Ümraniye Kaymakamlığı tarafından gönderilmiştir.")
+        self.assertEqual(len(samples), 1)
+        self.assertIn("Kaymakamlığı", samples[0])
+
+    def test_named_court_inside_a_generic_trailing_clause_is_still_reported(self):
+        """The suppression is one-directional, and this is why it has to be.
+
+        The generic match starts first here and its trailing span runs over the
+        start of "3. Sulh Ceza Hakimliği". Suppressing in that direction too
+        would silently drop a second, genuinely distinct authority.
+        """
+        samples = self.court_samples("Kadıköy Kaymakamlığı yazısı 3. Sulh Ceza Hakimliği dosyasına eklenmiştir")
+        self.assertIn("3. Sulh Ceza Hakimliği", samples)
+        self.assertTrue(any("Kaymakamlığı" in sample for sample in samples), samples)
+
+    def court_findings(self, text: str) -> list[dict]:
+        return [f for f in analyze_privacy("karar.txt", text)["risk_map"] if f["category"] == "court_or_authority"]
+
+    def assert_covered_by_a_finding(self, text: str, needle: str):
+        """Every occurrence of `needle` lies inside some court finding's span.
+
+        Coverage, not mere detection, is the property that matters downstream: a
+        span carrying no finding cannot be approved by a reviewer, so export can
+        never redact it. Asserting on spans rather than on `sample` substrings
+        also keeps this from passing on a truncated fragment that happens to
+        contain the word.
+        """
+        findings = self.court_findings(text)
+        occurrences = [m.span() for m in re.finditer(re.escape(needle), text)]
+        self.assertTrue(occurrences, f"{needle!r} does not occur in the text")
+        for start, end in occurrences:
+            self.assertTrue(
+                any(f["start"] <= start and end <= f["end"] for f in findings),
+                f"{needle!r} at [{start}:{end}] is covered by no finding: "
+                f"{[(f['start'], f['end'], f['sample']) for f in findings]}",
+            )
+
+    def test_authority_after_a_named_court_is_still_reported(self):
+        """The ordering that actually broke: named court FIRST, authority after.
+
+        Skipping the generic match here also skips the 120 characters it spans,
+        because re.finditer is non-overlapping -- so the prosecutor's office got
+        no finding at all and survived verbatim into the preview. The scan has
+        to resume at the end of the enclosing named span, not after the skipped
+        match.
+        """
+        text = "İstanbul Anadolu 4. Asliye Ceza Mahkemesi kararı Kadıköy Cumhuriyet Başsavcılığı'na gönderilmiştir"
+        samples = self.court_samples(text)
+
+        self.assertIn("4. Asliye Ceza Mahkemesi", samples)
+        self.assert_covered_by_a_finding(text, "Cumhuriyet Başsavcılığı")
+        self.assertNotIn("Cumhuriyet Başsavcılığı", analyze_privacy("karar.txt", text)["redacted_preview"])
+
+    def test_authority_after_a_named_notary_is_still_reported(self):
+        text = "Şişli 15. Noterliği senedi Şişli Tapu Müdürlüğü ve İstanbul Valiliği kayıtlarına işlendi"
+        samples = self.court_samples(text)
+
+        self.assertIn("15. Noterliği", samples)
+        self.assert_covered_by_a_finding(text, "Valiliği")
+
+    def test_authority_after_a_high_court_sixty_char_sweep_is_still_reported(self):
+        """The Yargıtay/Danıştay rule sweeps 60 characters past the name.
+
+        So its span is the widest window the generic rule skips, and the
+        authority that follows it is the one most likely to be lost.
+        """
+        text = (
+            "Danıştay içtihadına göre Ümraniye Kaymakamlığı işlemi iptal edilmiş "
+            "ve Kadıköy Valiliği yeni bir karar almıştır"
+        )
+        self.assert_covered_by_a_finding(text, "Danıştay")
+        self.assert_covered_by_a_finding(text, "Ümraniye Kaymakamlığı")
+        self.assert_covered_by_a_finding(text, "Valiliği")
+
+
 class PartyRoleScopeTests(unittest.TestCase):
     """party_role flags the role word only -- never the clause after it.
 
@@ -219,7 +358,7 @@ class PartyRoleScopeTests(unittest.TestCase):
     [PARTY_ROLE_n], spans were cut mid-date, and legal substance was destroyed.
     """
 
-    TEXT = "Müşteki Fatma Yıldız (TCKN: 20433218148) 05.03.2026 tarihinde hazır bulundu."
+    TEXT = "Müşteki Fatma Yıldız (TCKN: 22222222220) 05.03.2026 tarihinde hazır bulundu."
 
     def analyze(self) -> dict:
         return analyze_privacy("tutanak.txt", self.TEXT)
@@ -238,7 +377,7 @@ class PartyRoleScopeTests(unittest.TestCase):
         roles = self.party_role_findings()
         self.assertEqual(len(roles), 1)
         self.assertNotIn("Fatma", roles[0]["sample"])
-        self.assertNotIn("20433218148", roles[0]["sample"])
+        self.assertNotIn("22222222220", roles[0]["sample"])
 
     def test_nested_identifiers_keep_their_own_category_and_risk(self):
         by_category = {f["category"]: f for f in self.analyze()["risk_map"]}
@@ -252,7 +391,7 @@ class PartyRoleScopeTests(unittest.TestCase):
         self.assertTrue(any(f["category"] == "party_role" for f in result["risk_map"]))
         preview = result["redacted_preview"]
         self.assertIn("tarihinde hazır bulundu", preview)
-        for secret in ("Fatma Yıldız", "20433218148"):
+        for secret in ("Fatma Yıldız", "22222222220"):
             self.assertNotIn(secret, preview)
 
 
@@ -280,7 +419,7 @@ class RedactedPreviewSpanOrderingTests(unittest.TestCase):
             },
             {
                 "category": "turkish_national_id",
-                "sample": "20433218148",
+                "sample": "22222222220",
                 "risk": "CRITICAL",
                 "recommended_action": "Remove completely or replace with neutral placeholder",
                 "placeholder": "[NATIONAL_ID_1]",
@@ -289,7 +428,7 @@ class RedactedPreviewSpanOrderingTests(unittest.TestCase):
                 "fingerprint": "narrow",
             },
         ]
-        text = "20433218148 numaralı kişi hakkında işlem yapılmıştır."
+        text = "22222222220 numaralı kişi hakkında işlem yapılmıştır."
         preview = build_redacted_preview(text, findings)
         self.assertIn("[NATIONAL_ID_1]", preview)
         self.assertNotIn("[PARTY_ROLE_1]", preview)

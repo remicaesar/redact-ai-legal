@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import tests.env_setup  # noqa: F401  -- sets LEGAL_ANALYZER_SECRET_KEY before app is imported
 import app as app_module
 from legal_analyzer.privacy import analyze_privacy
 from legal_analyzer.taxonomy import CATEGORIES, SUBCATEGORIES

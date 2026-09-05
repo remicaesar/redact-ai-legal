@@ -76,10 +76,178 @@ def make_xlsx(path: Path) -> None:
         archive.writestr(
             "xl/worksheets/sheet1.xml",
             f'<?xml version="1.0"?><worksheet {ns}><sheetData>'
-            '<row><c t="s"><v>0</v></c><c><v>70013389034</v></c>'
+            '<row><c t="s"><v>0</v></c><c><v>55555555550</v></c>'
             '<c t="inlineStr"><is><t>Maas 42000 TL</t></is></c></row>'
             "</sheetData></worksheet>",
         )
+
+
+# The structural/presentational parts Word emits alongside the body. They carry
+# no document text, so extraction must stay silent about them -- if it warned
+# here, every real DOCX would be Partial and the warning would mean nothing.
+DOCX_STRUCTURAL_PARTS = {
+    "_rels/.rels": '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>',
+    "word/_rels/document.xml.rels": '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>',
+    "word/styles.xml": '<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+    "word/settings.xml": '<?xml version="1.0"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+    "word/webSettings.xml": '<?xml version="1.0"?><w:webSettings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+    "word/fontTable.xml": '<?xml version="1.0"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+    "word/numbering.xml": '<?xml version="1.0"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+    "word/theme/theme1.xml": '<?xml version="1.0"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>',
+    "word/media/image1.png": "\x89PNG\r\n",
+    "docProps/core.xml": '<?xml version="1.0"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"/>',
+    "docProps/app.xml": '<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"/>',
+}
+
+
+def wordml_part(tag: str, lines: list[str]) -> str:
+    """One `<w:p>` per line inside the given WordprocessingML root (`document`/`hdr`/`ftr`)."""
+    body = "".join(
+        f'<w:p><w:r><w:t xml:space="preserve">{escape(line)}</w:t></w:r></w:p>' for line in lines
+    )
+    return (
+        f'<?xml version="1.0"?><w:{tag} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"{body}</w:{tag}>"
+    )
+
+
+def make_docx_package(path: Path, parts: dict[str, str]) -> None:
+    """Build a DOCX from explicit part names plus the structural parts Word always emits."""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", DOCX_CONTENT_TYPES)
+        for name, content in DOCX_STRUCTURAL_PARTS.items():
+            archive.writestr(name, content)
+        for name, content in parts.items():
+            archive.writestr(name, content)
+
+
+# A letterhead DOCX in the shape Turkish legal practice actually produces: the
+# firm banner and client name live in the header part, the file number and TCKN
+# in the footer, and the body says nothing identifying on its own.
+LETTERHEAD_PARTS = {
+    "word/document.xml": wordml_part("document", ["1. Taraflar bu sözleşmeyi imzalamıştır."]),
+    "word/header1.xml": wordml_part("hdr", ["Demir Hukuk Bürosu — GİZLİ", "Müvekkil: Ayşe Demir"]),
+    "word/footer1.xml": wordml_part("ftr", ["Dosya No: 2024/1471 — TCKN: 10000000146"]),
+}
+
+
+A_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+P_NS = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+SHEET_NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+
+
+def drawingml_paragraphs(lines: list[str]) -> str:
+    """One `<a:p>` per line -- the DrawingML text body every PPTX part uses."""
+    return "".join(f"<a:p><a:r><a:t>{escape(line)}</a:t></a:r></a:p>" for line in lines)
+
+
+def xlsx_worksheet(cells: str, header: str = "", footer: str = "") -> str:
+    """A worksheet part with an optional print header/footer, as Excel stores them."""
+    header_footer = (
+        f"<headerFooter><oddHeader>{escape(header)}</oddHeader>"
+        f"<oddFooter>{escape(footer)}</oddFooter></headerFooter>"
+        if header or footer
+        else ""
+    )
+    return (
+        f'<?xml version="1.0"?><worksheet {SHEET_NS}><sheetData>{cells}</sheetData>'
+        f"{header_footer}</worksheet>"
+    )
+
+
+# The structural/presentational parts PowerPoint emits. Extraction must stay
+# silent about these or every real deck would be Partial and the warning would
+# mean nothing. `ppt/diagrams/drawing1.xml` is here because it is the rendered
+# cache of `ppt/diagrams/data1.xml`, which IS read.
+PPTX_STRUCTURAL_PARTS = {
+    "[Content_Types].xml": "<Types/>",
+    "_rels/.rels": "<Relationships/>",
+    "ppt/_rels/presentation.xml.rels": "<Relationships/>",
+    "ppt/presentation.xml": f"<p:presentation {P_NS}/>",
+    "ppt/presProps.xml": f"<p:presentationPr {P_NS}/>",
+    "ppt/viewProps.xml": f"<p:viewPr {P_NS}/>",
+    "ppt/tableStyles.xml": f"<a:tblStyleLst {A_NS}/>",
+    "ppt/theme/theme1.xml": f"<a:theme {A_NS}/>",
+    "ppt/media/image1.png": "PNG",
+    "ppt/diagrams/layout1.xml": f"<a:layoutDef {A_NS}/>",
+    "ppt/diagrams/colors1.xml": f"<a:colorsDef {A_NS}/>",
+    "ppt/diagrams/quickStyle1.xml": f"<a:styleDef {A_NS}/>",
+    "ppt/diagrams/drawing1.xml": f"<a:drawing {A_NS}/>",
+    "docProps/app.xml": "<Properties/>",
+}
+
+# Same, for Excel. `xl/drawings/vmlDrawing1.vml` is the legacy note-popup shape
+# whose text lives in xl/comments1.xml, which IS read.
+XLSX_STRUCTURAL_PARTS = {
+    "[Content_Types].xml": "<Types/>",
+    "_rels/.rels": "<Relationships/>",
+    "xl/_rels/workbook.xml.rels": "<Relationships/>",
+    "xl/styles.xml": f"<styleSheet {SHEET_NS}/>",
+    "xl/calcChain.xml": f"<calcChain {SHEET_NS}/>",
+    "xl/theme/theme1.xml": f"<a:theme {A_NS}/>",
+    "xl/media/image1.png": "PNG",
+    "xl/printerSettings/printerSettings1.bin": "bin",
+    "xl/drawings/vmlDrawing1.vml": "<xml/>",
+    "docProps/app.xml": "<Properties/>",
+}
+
+
+def make_ooxml_package(path: Path, structural: dict[str, str], parts: dict[str, str]) -> None:
+    """Build a container from explicit part names plus the structural parts the app emits."""
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in structural.items():
+            archive.writestr(name, content)
+        for name, content in parts.items():
+            archive.writestr(name, content)
+
+
+# A deck in the shape a firm actually produces: the letterhead is typed onto the
+# slide master so it repeats on every slide, and the identifying detail sits in
+# a SmartArt diagram, whose text lives in ppt/diagrams/data1.xml. The slide
+# itself says nothing identifying.
+LETTERHEAD_DECK_PARTS = {
+    "ppt/slideMasters/slideMaster1.xml": f'<?xml version="1.0"?><p:sldMaster {A_NS} {P_NS}>'
+    + drawingml_paragraphs(["Demir Hukuk Bürosu — GİZLİ"])
+    + "</p:sldMaster>",
+    "ppt/slides/slide1.xml": f'<?xml version="1.0"?><p:sld {A_NS} {P_NS}>'
+    + drawingml_paragraphs(["1. Devir sözleşmesi özeti"])
+    + "</p:sld>",
+    "ppt/diagrams/data1.xml": '<?xml version="1.0"?><dgm:dataModel '
+    + A_NS
+    + ' xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram">'
+    + drawingml_paragraphs(["Müvekkil: Ayşe Demir", "TCKN: 10000000146"])
+    + "</dgm:dataModel>",
+}
+
+# Gate fixture: the identifiers exist ONLY in the sheet's print header and
+# footer, and the one cell holds a bare number. A fixture that also carried a
+# name in a comment or a sheet tab could not express the violation -- the gate
+# would stay shut on that other finding even with <headerFooter> unread.
+PRINT_HEADER_ONLY_WORKBOOK_PARTS = {
+    "xl/worksheets/sheet1.xml": xlsx_worksheet(
+        "<row><c><v>42000</v></c></row>",
+        header="&LMüvekkil: Ayşe Demir",
+        footer="&RTCKN: 10000000146",
+    ),
+}
+
+# A payroll workbook whose only identifiers are in the sheet's PRINT header and
+# footer -- which live inside the sheet part, so the part was read while
+# <headerFooter> was skipped -- and in a cell comment. The cells themselves
+# carry only a label and a number.
+LETTERHEAD_WORKBOOK_PARTS = {
+    "xl/workbook.xml": f'<?xml version="1.0"?><workbook {SHEET_NS}>'
+    '<sheets><sheet name="Bordro 2024" sheetId="1"/></sheets></workbook>',
+    "xl/sharedStrings.xml": f'<?xml version="1.0"?><sst {SHEET_NS}><si><t>Personel</t></si></sst>',
+    "xl/worksheets/sheet1.xml": xlsx_worksheet(
+        '<row><c t="s"><v>0</v></c><c><v>42000</v></c></row>',
+        header='&L&"Arial,Bold"&12Demir Hukuk Bürosu — GİZLİ&RMüvekkil: Ayşe Demir',
+        footer="&LDosya No: 2024/1471&RTCKN: 10000000146 &P/&N",
+    ),
+    "xl/comments1.xml": f'<?xml version="1.0"?><comments {SHEET_NS}>'
+    "<authors><author>Elif Şahin</author></authors>"
+    '<commentList><comment ref="A1"><text><r><t>Not: maas bilgisi</t></r></text></comment></commentList></comments>',
+}
 
 
 class ExtractionTests(unittest.TestCase):
@@ -121,7 +289,7 @@ class ExtractionTests(unittest.TestCase):
 
         self.assertIsNone(warning)
         self.assertIn("Elif Sahin", text)
-        self.assertIn("70013389034", text)  # numeric cell value, not shared string
+        self.assertIn("55555555550", text)  # numeric cell value, not shared string
         self.assertIn("Maas 42000 TL", text)
 
     def test_zip_extraction_reads_members_and_skips_nested_zips(self):
@@ -232,6 +400,382 @@ class ExtractionTests(unittest.TestCase):
         self.assertNotIn("Alpaslan Zeynep Karaduman", names)
 
 
+    def test_docx_header_and_footer_text_is_scanned_for_identifiers(self):
+        # word/header1.xml and word/footer1.xml were skipped outright, so a
+        # letterhead client name and a TCKN produced ZERO findings while
+        # extraction still reported Complete.
+        docx = self.tmp_path / "letterhead.docx"
+        make_docx_package(docx, LETTERHEAD_PARTS)
+
+        text, warning = extract_text(docx)
+
+        self.assertIsNone(warning)
+        findings = analyze_privacy(docx.name, text, warning)["risk_map"]
+        names = {f["sample"] for f in findings if f["category"] == "natural_person_name"}
+        ids = {f["sample"] for f in findings if f["category"] == "turkish_national_id"}
+        self.assertIn("Ayşe Demir", names)      # from the header
+        self.assertIn("10000000146", ids)       # from the footer
+
+    def test_docx_header_footer_identifiers_keep_the_external_llm_gate_shut(self):
+        # The end-to-end proof: even with redaction marked complete and human
+        # review approved -- the natural response to an empty findings list --
+        # a document whose only identifiers sit in the header and footer must
+        # not be certified for external LLM use.
+        docx = self.tmp_path / "letterhead.docx"
+        make_docx_package(docx, LETTERHEAD_PARTS)
+
+        text, warning = extract_text(docx)
+        profile = analyze_privacy(
+            docx.name,
+            text,
+            warning,
+            redaction_completed=True,
+            human_review_approved=True,
+        )
+
+        # Complete matters as much as the gate: the block must come from the
+        # findings now being visible, not from an extraction warning. A warning
+        # would shut the gate too, and would hide a reintroduced leak.
+        self.assertEqual(profile["extraction_status"]["status"], "Complete")
+        self.assertFalse(profile["external_llm_gate"]["allowed"])
+        self.assertNotEqual(profile["residual_risk"]["level"], "Low")
+
+    def test_docx_parts_are_extracted_in_page_reading_order(self):
+        docx = self.tmp_path / "letterhead.docx"
+        make_docx_package(docx, LETTERHEAD_PARTS)
+
+        text, _ = extract_text(docx)
+
+        self.assertLess(text.index("Demir Hukuk Bürosu"), text.index("1. Taraflar"))
+        self.assertLess(text.index("1. Taraflar"), text.index("Dosya No"))
+        # Header text must not run into the first body line: several detection
+        # rules bound their trailing context with [^\n], so a joined seam lets a
+        # finding's sample swallow text from the next part.
+        self.assertIn("Ayşe Demir\n\n1. Taraflar", text)
+        self.assertIn("imzalamıştır.\n\nDosya No", text)
+
+    def test_docx_part_boundary_holds_when_a_part_has_no_paragraph(self):
+        # Every part a real Word file emits opens with a <w:p>, which already
+        # separates it from the previous part. This is the case where it does
+        # not: a part whose text hangs outside any paragraph, which the parser
+        # tolerates via the trailing flush. The explicit part separator is the
+        # only thing keeping the header off the body's first line here.
+        docx = self.tmp_path / "loose.docx"
+        make_docx_package(
+            docx,
+            {
+                "word/header1.xml": wordml_part("hdr", ["Müvekkil: Ayşe Demir"]),
+                "word/document.xml": '<?xml version="1.0"?>'
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:body><w:r><w:t>1. Taraflar bu sözleşmeyi imzalamıştır.</w:t></w:r></w:body></w:document>',
+            },
+        )
+
+        text, _ = extract_text(docx)
+
+        self.assertIn("Ayşe Demir\n\n1. Taraflar", text)
+
+    def test_unhandled_docx_part_warns_and_blocks_complete_status(self):
+        # A part that is neither read nor known-benign must degrade loudly.
+        # Chart text is the stand-in here for the whole class -- textboxes in
+        # custom parts, embedded workbooks, glossary quick parts.
+        docx = self.tmp_path / "chart.docx"
+        make_docx_package(
+            docx,
+            {
+                "word/document.xml": wordml_part("document", ["Ekli grafiğe bakınız."]),
+                "word/charts/chart1.xml": "<c:chart><c:v>Ayşe Demir</c:v></c:chart>",
+            },
+        )
+
+        text, warning = extract_text(docx)
+
+        self.assertIsNotNone(warning)
+        self.assertIn("word/charts/chart1.xml", warning)
+        self.assertIn("NOT extracted", warning)
+        status = analyze_privacy(docx.name, text, warning)["extraction_status"]
+        self.assertNotEqual(status["status"], "Complete")
+        self.assertTrue(status["blocks_external_llm"])
+
+    def test_ordinary_docx_with_structural_parts_extracts_without_warning(self):
+        # Anti-vacuity guard for the test above: styles, settings, fonts,
+        # numbering, theme, media, relationships and docProps must stay silent,
+        # or "warn on everything" would pass every other test in this group.
+        docx = self.tmp_path / "plain.docx"
+        make_docx_package(
+            docx,
+            {"word/document.xml": wordml_part("document", ["Sözleşme metni burada."])},
+        )
+
+        text, warning = extract_text(docx)
+
+        self.assertIsNone(warning)
+        self.assertEqual(text, "Sözleşme metni burada.")
+        self.assertEqual(analyze_privacy(docx.name, text, warning)["extraction_status"]["status"], "Complete")
+
+
+    def test_pptx_slide_master_and_smartart_text_is_scanned_for_identifiers(self):
+        # ppt/slideMasters/* and ppt/diagrams/data*.xml were skipped outright,
+        # so a deck whose letterhead is on the master and whose client name and
+        # TCKN are in a SmartArt diagram produced ZERO findings while extraction
+        # still reported Complete. SmartArt is fully visible slide content.
+        deck = self.tmp_path / "sunum.pptx"
+        make_ooxml_package(deck, PPTX_STRUCTURAL_PARTS, LETTERHEAD_DECK_PARTS)
+
+        text, warning = extract_text(deck)
+
+        self.assertIsNone(warning)
+        findings = analyze_privacy(deck.name, text, warning)["risk_map"]
+        names = {f["sample"] for f in findings if f["category"] == "natural_person_name"}
+        ids = {f["sample"] for f in findings if f["category"] == "turkish_national_id"}
+        self.assertIn("Ayşe Demir", names)      # from the SmartArt diagram
+        self.assertIn("10000000146", ids)       # from the SmartArt diagram
+        self.assertIn("Demir Hukuk Bürosu", text)  # from the slide master
+
+    def test_pptx_master_and_smartart_identifiers_keep_the_external_llm_gate_shut(self):
+        # The end-to-end proof for PPTX: even with redaction marked complete and
+        # human review approved, a deck whose only identifiers are on the master
+        # and in SmartArt must not be certified for external LLM use.
+        deck = self.tmp_path / "sunum.pptx"
+        make_ooxml_package(deck, PPTX_STRUCTURAL_PARTS, LETTERHEAD_DECK_PARTS)
+
+        text, warning = extract_text(deck)
+        profile = analyze_privacy(
+            deck.name,
+            text,
+            warning,
+            redaction_completed=True,
+            human_review_approved=True,
+        )
+
+        # Complete matters as much as the gate: the block must come from the
+        # findings now being visible, not from an extraction warning. A warning
+        # would shut the gate too, and would hide a reintroduced leak.
+        self.assertEqual(profile["extraction_status"]["status"], "Complete")
+        self.assertFalse(profile["external_llm_gate"]["allowed"])
+        self.assertNotEqual(profile["residual_risk"]["level"], "Low")
+
+    def test_pptx_parts_are_extracted_in_reading_order(self):
+        deck = self.tmp_path / "sunum.pptx"
+        make_ooxml_package(deck, PPTX_STRUCTURAL_PARTS, LETTERHEAD_DECK_PARTS)
+
+        text, _ = extract_text(deck)
+
+        # Recurring page furniture (the master) before the slides, then the
+        # SmartArt bodies hanging off them.
+        self.assertLess(text.index("Demir Hukuk Bürosu"), text.index("Devir sözleşmesi"))
+        self.assertLess(text.index("Devir sözleşmesi"), text.index("Müvekkil"))
+        self.assertIn("GİZLİ\n\n1. Devir", text)  # parts must not run together
+
+    def test_pptx_classic_comment_text_starts_its_own_line(self):
+        # A classic PowerPoint comment part is `<p:cm><p:text>` with no `<a:p>`
+        # anywhere, so nothing in the parse self-separates it from the slide
+        # before it -- the explicit part separator is the only thing keeping the
+        # comment off the slide's last line. `<p:text>` is a whole field rather
+        # than a run, so each comment also gets its own line.
+        deck = self.tmp_path / "yorum.pptx"
+        make_ooxml_package(
+            deck,
+            PPTX_STRUCTURAL_PARTS,
+            {
+                "ppt/slides/slide1.xml": f'<?xml version="1.0"?><p:sld {A_NS} {P_NS}>'
+                + drawingml_paragraphs(["1. Devir sözleşmesi özeti"])
+                + "</p:sld>",
+                "ppt/comments/comment1.xml": f'<?xml version="1.0"?><p:cmLst {P_NS}>'
+                "<p:cm><p:text>Müvekkil: Ayşe Demir</p:text></p:cm>"
+                "<p:cm><p:text>TCKN: 10000000146</p:text></p:cm></p:cmLst>",
+            },
+        )
+
+        text, warning = extract_text(deck)
+
+        self.assertIsNone(warning)
+        self.assertIn("özeti\n\nMüvekkil: Ayşe Demir", text)
+        self.assertIn("Ayşe Demir\nTCKN: 10000000146", text)
+
+    def test_unhandled_pptx_part_warns_and_blocks_complete_status(self):
+        deck = self.tmp_path / "grafik.pptx"
+        make_ooxml_package(
+            deck,
+            PPTX_STRUCTURAL_PARTS,
+            {
+                "ppt/slides/slide1.xml": f'<?xml version="1.0"?><p:sld {A_NS} {P_NS}>'
+                + drawingml_paragraphs(["Ekli grafiğe bakınız."])
+                + "</p:sld>",
+                "ppt/charts/chart1.xml": "<c:chart><c:v>Ayşe Demir</c:v></c:chart>",
+            },
+        )
+
+        text, warning = extract_text(deck)
+
+        self.assertIsNotNone(warning)
+        self.assertIn("ppt/charts/chart1.xml", warning)
+        self.assertIn("NOT extracted", warning)
+        status = analyze_privacy(deck.name, text, warning)["extraction_status"]
+        self.assertNotEqual(status["status"], "Complete")
+        self.assertTrue(status["blocks_external_llm"])
+
+    def test_ordinary_pptx_with_structural_parts_extracts_without_warning(self):
+        # Anti-vacuity guard: presentation/presProps/viewProps/tableStyles,
+        # theme, media, the three presentational SmartArt parts and docProps
+        # must stay silent, or "warn on everything" would pass the test above.
+        deck = self.tmp_path / "duz.pptx"
+        make_ooxml_package(
+            deck,
+            PPTX_STRUCTURAL_PARTS,
+            {
+                "ppt/slides/slide1.xml": f'<?xml version="1.0"?><p:sld {A_NS} {P_NS}>'
+                + drawingml_paragraphs(["Sunum metni burada."])
+                + "</p:sld>",
+            },
+        )
+
+        text, warning = extract_text(deck)
+
+        self.assertIsNone(warning)
+        self.assertEqual(text, "Sunum metni burada.")
+        self.assertEqual(analyze_privacy(deck.name, text, warning)["extraction_status"]["status"], "Complete")
+
+    def test_xlsx_print_header_footer_and_comments_are_scanned_for_identifiers(self):
+        # The print header/footer lives INSIDE xl/worksheets/sheet1.xml, so the
+        # part was read while <headerFooter> was skipped: a sheet whose only
+        # identifiers were its letterhead and a cell comment extracted as the
+        # single cell value 42000, with no warning.
+        workbook = self.tmp_path / "bordro.xlsx"
+        make_ooxml_package(workbook, XLSX_STRUCTURAL_PARTS, LETTERHEAD_WORKBOOK_PARTS)
+
+        text, warning = extract_text(workbook)
+
+        self.assertIsNone(warning)
+        findings = analyze_privacy(workbook.name, text, warning)["risk_map"]
+        names = {f["sample"] for f in findings if f["category"] == "natural_person_name"}
+        ids = {f["sample"] for f in findings if f["category"] == "turkish_national_id"}
+        cases = {f["sample"] for f in findings if f["category"] == "case_or_investigation_number"}
+        self.assertIn("Ayşe Demir", names)          # print header
+        self.assertIn("10000000146", ids)           # print footer
+        self.assertIn("Dosya No: 2024/1471", cases)  # print footer
+        self.assertIn("Elif Şahin", names)          # xl/comments1.xml author
+        self.assertIn("Bordro 2024", text)          # xl/workbook.xml sheet name
+
+    def test_xlsx_print_header_identifiers_keep_the_external_llm_gate_shut(self):
+        # The end-to-end proof for XLSX: the only identifiers in this workbook
+        # are in the sheet's print header and footer, so if <headerFooter> goes
+        # unread the finding count drops to zero and the gate swings open.
+        workbook = self.tmp_path / "bordro.xlsx"
+        make_ooxml_package(workbook, XLSX_STRUCTURAL_PARTS, PRINT_HEADER_ONLY_WORKBOOK_PARTS)
+
+        text, warning = extract_text(workbook)
+        profile = analyze_privacy(
+            workbook.name,
+            text,
+            warning,
+            redaction_completed=True,
+            human_review_approved=True,
+        )
+
+        # Complete matters as much as the gate: the block must come from the
+        # findings now being visible, not from an extraction warning. A warning
+        # would shut the gate too, and would hide a reintroduced leak.
+        self.assertEqual(profile["extraction_status"]["status"], "Complete")
+        self.assertFalse(profile["external_llm_gate"]["allowed"])
+        self.assertNotEqual(profile["residual_risk"]["level"], "Low")
+
+    def test_xlsx_header_footer_format_codes_are_stripped_and_sections_split(self):
+        # Excel stores a print header as one string of format codes plus text.
+        # &L/&C/&R are side-by-side print regions, so they become tabs: a tab is
+        # the column boundary turkish_names._best_name_run uses to stop two
+        # adjacent names merging into one bogus four-token span.
+        workbook = self.tmp_path / "imza.xlsx"
+        make_ooxml_package(
+            workbook,
+            XLSX_STRUCTURAL_PARTS,
+            {
+                "xl/worksheets/sheet1.xml": xlsx_worksheet(
+                    "",
+                    header='&L&"Times,Bold"&14&KFF0000Kerem Alpaslan&RZeynep Karaduman',
+                    footer="&CSayfa &P/&N",
+                ),
+            },
+        )
+
+        text, warning = extract_text(workbook)
+
+        self.assertIsNone(warning)
+        self.assertNotIn("&", text)  # every format code consumed
+        self.assertNotIn("Arial", text)
+        self.assertIn("Kerem Alpaslan\tZeynep Karaduman", text)
+        names = {
+            f["sample"]
+            for f in analyze_privacy(workbook.name, text, warning)["risk_map"]
+            if f["category"] == "natural_person_name"
+        }
+        self.assertIn("Kerem Alpaslan", names)
+        self.assertIn("Zeynep Karaduman", names)
+        self.assertNotIn("Kerem Alpaslan Zeynep", names)
+
+    def test_unhandled_xlsx_part_warns_and_blocks_complete_status(self):
+        # A pivot cache holds a verbatim copy of the source rows, so an
+        # unhandled one is exactly the class this must degrade loudly on.
+        workbook = self.tmp_path / "pivot.xlsx"
+        make_ooxml_package(
+            workbook,
+            XLSX_STRUCTURAL_PARTS,
+            {
+                "xl/worksheets/sheet1.xml": xlsx_worksheet("<row><c><v>42000</v></c></row>"),
+                "xl/pivotCache/pivotCacheDefinition1.xml": "<pivotCacheDefinition><s v='Ayşe Demir'/></pivotCacheDefinition>",
+            },
+        )
+
+        text, warning = extract_text(workbook)
+
+        self.assertIsNotNone(warning)
+        self.assertIn("xl/pivotCache/pivotCacheDefinition1.xml", warning)
+        self.assertIn("NOT extracted", warning)
+        status = analyze_privacy(workbook.name, text, warning)["extraction_status"]
+        self.assertNotEqual(status["status"], "Complete")
+        self.assertTrue(status["blocks_external_llm"])
+
+    def test_ordinary_xlsx_with_structural_parts_extracts_without_warning(self):
+        # Anti-vacuity guard: styles, calcChain, theme, media, printerSettings,
+        # the legacy vmlDrawing note anchors, relationships and docProps must
+        # stay silent, or "warn on everything" would pass the test above.
+        workbook = self.tmp_path / "duz.xlsx"
+        make_ooxml_package(
+            workbook,
+            XLSX_STRUCTURAL_PARTS,
+            {"xl/worksheets/sheet1.xml": xlsx_worksheet("<row><c><v>42000</v></c></row>")},
+        )
+
+        text, warning = extract_text(workbook)
+
+        self.assertIsNone(warning)
+        self.assertEqual(text, "42000")
+        self.assertEqual(analyze_privacy(workbook.name, text, warning)["extraction_status"]["status"], "Complete")
+
+    def test_zip_reports_members_it_cannot_extract(self):
+        # A bundle of one contract plus scanned pages used to extract the
+        # contract and report Complete without ever mentioning the pages.
+        bundle = self.tmp_path / "dosya.zip"
+        contract = self.tmp_path / "sozlesme.txt"
+        contract.write_text("Sozlesme metni", encoding="utf-8")
+        with zipfile.ZipFile(bundle, "w") as archive:
+            archive.write(contract, "sozlesme.txt")
+            archive.writestr("tarama1.jpg", b"\xff\xd8ff")
+            archive.writestr("notlar.rtf", b"{\\rtf1 Ayse Demir}")
+
+        text, warning = extract_text(bundle)
+
+        self.assertIn("Sozlesme metni", text)
+        self.assertIsNotNone(warning)
+        self.assertIn("tarama1.jpg", warning)
+        self.assertIn("notlar.rtf", warning)
+        self.assertIn("NOT extracted", warning)
+        status = analyze_privacy(bundle.name, text, warning)["extraction_status"]
+        self.assertNotEqual(status["status"], "Complete")
+        self.assertTrue(status["blocks_external_llm"])
+
+
+
 class FormatParityTests(unittest.TestCase):
     """The core invariant this fix restores: same content, same findings, any format.
 
@@ -251,6 +795,7 @@ class FormatParityTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def test_txt_and_docx_produce_matching_unswallowed_findings_for_every_gold_document(self):
+        import tests.env_setup  # noqa: F401  -- sets LEGAL_ANALYZER_SECRET_KEY before app is imported
         from app import build_docx  # local import: app.py is a large Flask module
 
         labels_path = PROJECT_DIR / "gold" / "gold_labels.example.json"

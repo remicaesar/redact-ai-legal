@@ -4,6 +4,21 @@ A cautious legal-tech prototype for classifying legal documents and preparing pr
 
 The product deliberately avoids describing outputs as fully anonymous unless re-identification risk has been assessed and is genuinely low. It distinguishes redaction, pseudonymization, de-identification, and anonymization, and treats legal documents as high-context records where dates, authorities, locations, case facts, and party roles may still re-identify people or matters.
 
+## What the engine is
+
+The detection engine is entirely rules-based: deterministic regular expressions, the
+official check-digit algorithms for Turkish national ID (TCKN) and tax (VKN) numbers,
+and a Turkish name gazetteer. There is no machine-learning model, no LLM inference, and
+no outbound network call — the same document produces the same findings on every run,
+and every finding cites the rule that produced it, which is what makes a redaction
+decision auditable and reproducible for a lawyer who has to defend it later. "Redact
+AI" is the product name, not a claim that a model is doing the reading. The point of the
+tool is the opposite: it prepares a document so that a human can afterwards make a
+deliberate, informed decision about sending it to an external LLM somewhere else.
+Rules also mean rule-shaped limits — a pattern the gazetteer and the regular expressions
+do not cover is a pattern the engine will miss, which is why every finding is gated on
+human review.
+
 ## Quick Start
 
 ```bash
@@ -11,7 +26,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export LEGAL_ANALYZER_ADMIN_PASSWORD="change-this-local-password"
-python3 db/init_db.py
+export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+python3 db/init_db.py        # keeps an existing database; use --reset to wipe (destructive)
 python3 db/migrate.py
 python3 classify.py
 python3 app.py
@@ -19,7 +35,62 @@ python3 app.py
 
 Open `http://127.0.0.1:5000`.
 
+`LEGAL_ANALYZER_SECRET_KEY` signs session cookies and has **no default** — the app
+refuses to start without it, because a known signing key lets anyone forge an admin
+session. Generate one once and keep it in your environment or `.env`.
+
 The first local admin is created from `LEGAL_ANALYZER_ADMIN_USERNAME` and `LEGAL_ANALYZER_ADMIN_PASSWORD`; the username defaults to `admin` when only the password is set.
+
+## Threat Model
+
+Read this before deciding how to run it, and before trusting anything it says
+about a document's privacy status.
+
+**What this is.** A local-first, single-user Flask workstation for one person
+at a time on one machine. It classifies documents and detects privacy
+findings with regular expressions plus check-digit validation (TCKN/VKN) and a
+Turkish name gazetteer — not a machine-learning model, not an LLM, and it makes
+no outbound network calls. Every finding requires a human reviewer to
+approve it, dismiss it as not sensitive, keep it unredacted, or add one before it affects an export; detection is not
+redaction, and redaction is not anonymization until a lawyer has assessed
+residual re-identification risk (see "Output Positioning" below).
+
+**What it does not defend against.**
+
+- **Single-user, no multi-tenancy.** There is no concept of separating one
+  user's documents, matters, or client roster from another's. Everyone who
+  logs in shares the same document store.
+- **Binds to `127.0.0.1` and trusts anyone who can reach the port.** The app
+  assumes the only thing able to open a TCP connection to it is the person
+  running it, on their own machine. It does not defend against another
+  process, container, or user on the same host, and it has no protection
+  suitable for exposing the port on a LAN or the public internet — putting it
+  behind a reverse proxy or port-forward does not make it safe to do so.
+  **Do not deploy this on a public host or a shared server as-is.**
+- **Trusts local disk.** Documents, findings, exported artifacts, and the
+  SQLite database are stored as plain files with no encryption at rest.
+  Anyone with filesystem access to the machine (another local account, a
+  backup, a stolen disk) can read everything the app can read, including
+  documents still awaiting redaction review.
+- **Session-cookie auth with three roles, not a hardened identity system.**
+  Login uses server-side session cookies and three roles (`admin`, `reviewer`,
+  `viewer` — see "Migrations and Local Access Control" below). There is no
+  SSO, no MFA, and no per-document access control. Failed sign-ins ARE
+  throttled (see "Login throttling" below), and state-changing requests
+  require a CSRF token, but neither makes this an identity system you should
+  expose to a network.
+- **It is a prototype, not a certified anonymisation tool.** Recall and
+  precision are measured against a small synthetic gold set, not audited
+  against a legal or regulatory standard, and the release gate for external
+  LLM use is a set of engineering checks, not a compliance certification (see
+  "Accuracy Audit" and "Safety Gates" below). A "Low" residual-risk result or
+  a "reviewed" export status is an engineering signal, not a legal opinion
+  that a document is safe to share.
+
+If you need multi-user isolation, encryption at rest, network-facing
+authentication, or a compliance-audited pipeline, this project does not
+provide them today. Run it on a single machine, for a single reviewer, behind
+whatever OS-level access control that machine already has.
 
 ## Running It Beyond Your Own Machine
 
@@ -34,12 +105,12 @@ gunicorn --workers 4 --bind 127.0.0.1:5000 wsgi:application
 
 Configuration that matters here, all read from the environment (see `.env.example`):
 
-- `LEGAL_ANALYZER_SECRET_KEY` — signs the session cookie. **There is no hardcoded fallback.** Unset, each process generates its own ephemeral key, so sessions break on restart and across workers. Set it.
+- `LEGAL_ANALYZER_SECRET_KEY` — signs the session cookie. **There is no hardcoded fallback and no ephemeral one.** Unset, the app refuses to start and tells you how to generate a key. A process that will not boot cannot serve a forgeable session.
 - `LEGAL_ANALYZER_HTTPS=1` — adds the `Secure` flag to the session cookie. Leave unset for plain http on loopback, where a `Secure` cookie is never sent and login fails silently.
 - `LEGAL_ANALYZER_MAX_UPLOAD_BYTES` — request body cap, default 100 MB (the ceiling the ZIP extractor already enforces). Over it, the server returns 413.
 - `LEGAL_ANALYZER_DEBUG=1` — re-enables the Werkzeug debugger on the dev server. Off by default because that debugger executes arbitrary code from the browser on any traceback.
 
-Session cookies are `HttpOnly` and `SameSite=Lax` in all configurations.
+Session cookies are `HttpOnly` and `SameSite=Strict` in all configurations. CSRF protection is enforced independently rather than relying on the browser default.
 
 ### CSRF protection
 
@@ -62,6 +133,7 @@ Behind a reverse proxy, `remote_addr` is the proxy unless it is configured to pa
 ### What this deployment is and is not
 
 This is single-tenant software. **Every authenticated user can see every document** — there is no per-user or per-organisation scoping in the schema — so an install serves one firm, on a network you control, behind TLS. It is not multi-tenant and should not be exposed to the public internet or shared between organisations.
+
 
 ## Migrations and Local Access Control
 
@@ -112,15 +184,15 @@ Speed does not prove privacy quality. Run the mini-gold accuracy audit with manu
 python3 accuracy_audit.py --labels gold/gold_labels.example.json
 ```
 
-The bundled synthetic gold set covers 17 labeled documents (117 required labels): criminal investigation, civil petition, commercial contract, court judgment, enforcement file, employment dispute, medical malpractice, OCR-degraded scan text, notary power of attorney, KVKK data-subject request, lease agreement, and corporate resolution, plus three documents where person names appear with no title or party-role prefix (running text, attendee lists, signature blocks). Against this set the detector currently holds recall 1.0, precision 0.701, `false_low_count = 0`, and `risk_shortfall_count = 0` (including post-OCR passes). For a production-quality audit, replace or extend it with manually labeled real documents — synthetic fixtures validate the rules, not real-world layout and language variance. Track recall, precision, false negatives, and especially `false_low_count` and `risk_shortfall_count`.
+The bundled synthetic gold set covers 17 labeled documents (117 required labels): criminal investigation, civil petition, commercial contract, court judgment, enforcement file, employment dispute, medical malpractice, OCR-degraded scan text, notary power of attorney, KVKK data-subject request, lease agreement, and corporate resolution, plus three bare-name documents where person names appear WITHOUT a title or party-role prefix (running text, attendee/witness lists, signature blocks) — the hardest case for a rule-based detector. Against this set the detector currently holds recall 1.0, precision 0.701, `false_low_count = 0`, and `risk_shortfall_count = 0` (including post-OCR passes), but re-run `python3 accuracy_audit.py --labels gold/gold_labels.example.json` to regenerate those figures yourself rather than trusting the numbers in this README as the corpus grows. For a production-quality audit, replace or extend the set with manually labeled real documents — synthetic fixtures validate the rules, not real-world layout and language variance.
 
-`false_low_count` only fires when the computed residual risk is exactly `Low`; it cannot see a document whose gold-expected risk is High but computes Medium. `risk_shortfall_count` closes that gap — it fires whenever the computed risk level is ranked below the gold-expected level (Low < Medium < High), regardless of which two levels are involved, and does not fire on over-reporting (e.g. expected Medium, computed High). Both must be 0.
+Against this set the detector currently holds recall 1.0, precision 0.701 (58 false positives out of 194 findings), `false_low_count = 0`, and `risk_shortfall_count = 0`; the post-OCR pass holds precision 0.643. **Recall alone is not the number to trust**: quote precision beside it whenever recall is quoted, since a detector can reach recall 1.0 trivially by over-flagging. And treat the recall figure itself with caution for a different reason — it is measured on the same synthetic gold set that the detection rules in `legal_analyzer/privacy.py` were tuned against (the gold labels and the rules have been edited in the same commits), so it is a fitted number, not a held-out one. It says the rules match their own test set, not that they generalize to unseen documents. For a production-quality audit, replace or extend the gold set with manually labeled real documents — synthetic fixtures validate the rules, not real-world layout and language variance. Track recall, precision, false negatives, and especially `false_low_count` and `risk_shortfall_count`.
 
-Gold-label entries may include `ocr_text` to compare pre-OCR extraction with reviewer-accepted OCR text. The audit reports post-OCR metrics when those fields are present, while keeping `false_low_count = 0` and `risk_shortfall_count = 0` as the targets.
+Gold-label entries may include `ocr_text` to compare pre-OCR extraction with reviewer-accepted OCR text. The audit reports post-OCR metrics when those fields are present, while keeping `false_low_count = 0` as the target.
 
 For Turkish-lawyer validation, include UYAP/UDF files, petitions, criminal complaints, contracts, scanned exhibits, and clean templates. Label TCKN, VKN, MERSIS, bar registration numbers, court/case numbers, investigation numbers, party roles, addresses, and UYAP terms.
 
-Detection validates TCKN and VKN check digits to cut false positives, and recognizes numbered court chambers (for example `4. Asliye Ticaret Mahkemesi`, `Yargıtay 11. Hukuk Dairesi`), notary offices and judgeships (`24. Noterliği`, `3. Sulh Ceza Hakimliği`), bare 16-digit MERSIS numbers, witness/victim party roles, and apartment-style address fragments. Person names are caught from professional titles (`Av.`, `Dr.`, `Sayın`, including OCR-degraded `Av .`) and from party-role context (`Davacı Elif Şahin`, `şüpheli Kemal Arslan`, `kiracı Barış Tunç`), while all-caps company names stay in the company category. Address matching includes leading street names and survives internal numbering dots (`Bağdat Caddesi No: 41`, `45. Sokak No: 8`). Case-number keywords include `Takip No` and `Yevmiye No`. Keyword patterns explicitly handle the Turkish dotted capital `İ` (for example `İlçesi`, `İstanbul`, `İcra`), which Python's case-insensitive matching does not fold to `i`.
+Detection validates TCKN and VKN check digits to cut false positives, and recognizes numbered court chambers (for example `4. Asliye Ticaret Mahkemesi`, `Yargıtay 11. Hukuk Dairesi`), notary offices and judgeships (`24. Noterliği`, `3. Sulh Ceza Hakimliği`), bare 16-digit MERSIS numbers, witness/victim party roles, and apartment-style address fragments. Person names are caught from professional titles (`Av.`, `Dr.`, `Sayın`, including OCR-degraded `Av .`) and from party-role context (`Davacı Elif Şahin`, `şüpheli Kemal Arslan`, `kiracı Barış Tunç`), while all-caps company names stay in the company category. Address matching includes leading street names and survives internal numbering dots (`Bağdat Caddesi No: 41`, `45. Sokak No: 8`). Case-number keywords include `Takip No` and `Yevmiye No`. Keyword patterns spell out both the diacritic and the diacritic-free spelling of the Turkish keywords (for example `[İi]lçesi|ilcesi`, `beşiktaş|besiktas`, `İcra|Icra`). This is not about the dotted capital `İ`: CPython's `re` module carries an internal case-equivalence table that already relates all four i-forms (`i`, `I`, `ı`, `İ`) under `re.IGNORECASE` — measured, not assumed. What case-insensitivity cannot do is relate `ç`, `ğ`, `ö`, `ş` and `ü` to their ASCII counterparts, and Turkish legal text is routinely typed without diacritics, so those spellings are enumerated explicitly.
 
 ## Safety Gates
 
@@ -141,7 +213,7 @@ The UI includes a Redaction Studio flow:
 - Optionally assign uploads to a local client/matter workspace; otherwise they go to `Unassigned`.
 - Run local extraction and privacy analysis immediately after upload.
 - Open the new document directly in a dedicated Redaction Studio workspace.
-- Review grouped findings, batch approve/reject lower-risk findings, inspect export gates, and compare preview/export options.
+- Review grouped findings, batch approve or dismiss lower-risk findings, inspect export gates, and compare preview/export options.
 - Export lower-assurance preview artifacts or reviewed DOCX redactions when the source and gates support it.
 
 The UI also supports first-pass review actions:
@@ -156,6 +228,24 @@ The UI also supports first-pass review actions:
 - Export an actual reviewed DOCX redaction artifact for DOCX source files only.
 
 Approval does not override the release gate. A document remains blocked unless every external LLM gate condition is satisfied.
+
+### Deciding a finding
+
+Each finding gets one of four decisions, and two of them are negative in different ways:
+
+- **Approve** — redact it. The text is replaced in the export.
+- **Not sensitive** (`dismissed`) — a false positive. The text stays, and release is not blocked.
+  This is the common case: precision on the bundled gold set is 0.701, so roughly three in ten
+  findings are things a reviewer should dismiss.
+- **Keep unredacted** (`retained`) — the finding is real and you are deliberately leaving it in.
+  The text stays **and release stays blocked**: a retained finding counts against residual risk,
+  a retained direct identifier also trips the direct-identifier gate, and export QA reports the
+  count instead of an unqualified pass. This decision is written to the audit log.
+- **Add finding** (`added_by_reviewer`) — something the detector missed; redacted like an approval.
+
+The distinction matters: `dismissed` says *the detector was wrong*, `retained` says *the detector
+was right and I am accepting the risk*. Collapsing them into one "reject" is what allowed a real
+identifier to pass the release gate.
 
 ## Matter Workspaces and Timeline
 

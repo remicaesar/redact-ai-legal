@@ -13,15 +13,19 @@ from flask import Blueprint, render_template
 
 landing_bp = Blueprint("landing", __name__)
 
-# Figures quoted on the page. These come from the repo's own tooling -- keep them
-# in step with `python3 accuracy_audit.py` output rather than editing by feel.
-# "mini-gold" is deliberate: the gold set is synthetic and small, and the audit's
-# own recommendation warns against reading it as a production accuracy claim.
+# No accuracy figure appears here, on purpose. The gold set is 17 synthetic
+# documents written by the people who wrote the rules, so recall 1.0 against it
+# is a regression guard, not a property of the detector on real filings -- and a
+# bare number above the fold on an unauthenticated page is what gets quoted back
+# without its qualifier. accuracy_audit.py's own recommendation field says the
+# same. Accuracy numbers stay in accuracy_report.json and behind login until a
+# real labelled corpus exists (the open launch gate). Everything below is a
+# property the code enforces, not a measurement; tests/test_landing.py keeps it so.
 STATS = [
-    {"value": "1.0", "label": "Recall on the mini-gold accuracy audit"},
-    {"value": "0", "label": "False-low findings, incl. post-OCR"},
+    {"value": "7", "label": "Conditions that must all hold before a document is cleared for an external LLM"},
+    {"value": "4", "label": "Review decisions a finding can receive — only approvals are redacted"},
+    {"value": "0", "label": "Outbound network calls during analysis: extraction, detection and OCR run locally"},
     {"value": "12", "label": "File types: DOCX, PDF, UDF, XLSX, PPTX…"},
-    {"value": "0", "label": "Documents sent to a hosted LLM without review"},
 ]
 
 FEATURES = [
@@ -90,8 +94,10 @@ GATES = [
 
 # Framed as "Designed around", NOT "Aligned to" / "Compliant with". Nothing here
 # has been certified or audited, and this project deliberately avoids claiming a
-# status it has not established.
-STANDARDS = ["GDPR", "KVKK", "HIPAA Safe Harbor", "ISO 27001 practices", "Attorney–client privilege"]
+# status it has not established. ISO 27001 is deliberately absent -- it is an
+# information-security *management-system* certification, not a property a
+# single-user local prototype without an audit can claim any relationship to.
+STANDARDS = ["GDPR", "KVKK", "HIPAA Safe Harbor", "Attorney–client privilege"]
 
 
 @landing_bp.route("/welcome")
