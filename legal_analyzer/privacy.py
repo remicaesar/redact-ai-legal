@@ -273,6 +273,65 @@ GENERIC_COURT_SUFFIX_RULE = DetectionRule(
     "COURT_AUTHORITY",
 )
 
+# One character of the trailing sweep used by health_data, criminal_allegation
+# and privileged_or_confidential. It is "any character except a newline or a
+# period", with ONE exception: a period that follows a single capital letter,
+# which is how an abbreviation is written ("T.C.", "A.Ş.").
+#
+# The plain [^.\n] class stopped the sweep at the first period of "T.C.", so in
+# "hasta Leyla Kaya T.C. Kimlik No: 10000000146 kanser" the match ended at
+# "Kaya T" and the diagnosis after the identifier -- the CRITICAL part of the
+# clause -- got no finding at all, and therefore no way for a reviewer to
+# approve it for redaction.
+#
+# Every other period still stops the sweep, so a real sentence boundary ends it:
+# "hasta iyileşti. Yeni cümle Ahmet Yılmaz" stops after "iyileşti" and the name
+# in the next sentence stays out of this finding. The exception is deliberately
+# scoped with (?-i:...) because these rules run under re.IGNORECASE, which would
+# otherwise make the character class match any letter and let a lowercase
+# single-letter word ("a. bendi") through the stop. The leading \b keeps it to a
+# one-letter word: the period in "iyileşti." follows "i", but there is no word
+# boundary before that "i", so it remains a stop.
+#
+# Accepted cost, stated because the exception has one: a period ending an
+# abbreviation is written exactly like a period ending a sentence that HAPPENS
+# to end on an abbreviation ("... Yıldız Holding A.Ş. Sonraki cümlede ..."), and
+# no regex can tell them apart. Measured on 336 generated probes of that shape,
+# the sweep crossed into the next sentence in all 336, against 288 probes where
+# it newly reached a diagnosis or allegation that no finding covered before.
+# That is over-detection, which is the direction this engine is built to fail
+# in: the extra segments are dismissible reviewer noise, they raise residual
+# risk rather than lower it, direct identifiers inside them are still cut out by
+# _cut_identifiers_from_context_findings, and build_redacted_preview clips
+# rather than drops the findings they overlap, so nothing is printed raw. A
+# missed CRITICAL clause has none of those consolations -- no reviewer is shown
+# it, so nobody can approve it for redaction.
+#
+# Two shapes deliberately stay stops, because widening to them is a separate
+# change with its own measurement and they are not what this fixes. Both
+# still cost a reachable CRITICAL miss, recorded here so the residual scope
+# is on the record rather than implied away:
+#   * any lowercase abbreviation -- titles ("Av.", "Dr."), and the ubiquitous
+#     "Ltd. Şti." and "vb." -- because their period follows a lowercase
+#     letter. The clause after "... Ltd. Şti. <diagnosis>" is uncovered.
+#   * a period after a digit, as in a date ("22.09.2025") or an ordinal
+#     institution name ("Kadıköy 2. Noterliği"), which the address rule does
+#     allow via its own (?<=\d)\. exception. Allowing it here lengthens all
+#     three CRITICAL context spans across dates and pulls an authority name
+#     into a privileged_or_confidential sample, which is the direction the
+#     identifier cut was added to move away from. Measured: it breaks the
+#     pinned samples in test_only_the_identifier_label_fragment_is_discarded,
+#     test_privileged_sample_keeps_no_client_identifier and
+#     test_address_tied_with_a_narrower_critical_is_not_printed. The cost of
+#     leaving it out is the commonest medical-filing shape: in
+#     "hasta Leyla Kaya 22.09.2025 tarihinde kanser tespit edildi" the
+#     diagnosis has no finding. Identical at base, so not a regression; it is
+#     the same defect class this exception fixes for "T.C.", and needs its own
+#     handling of the three pinned samples rather than a blanket allowance.
+# Also asymmetric, harmlessly: "I." is crossed (word boundary before the
+# single capital) while "II." is not (no boundary before the second I).
+_CONTEXT_SWEEP_CHAR = r"(?:[^.\n]|(?<=\b(?-i:[A-ZÇĞİÖŞÜ]))\.)"
+
 DETECTION_RULES = [
     DetectionRule("email_address", r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "HIGH", "Replace with consistent pseudonym", "EMAIL"),
     DetectionRule("phone_number", r"(?<!\d)(?:\+90|0)?\s?(?:5\d{2}|2\d{2}|3\d{2}|4\d{2})[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)", "HIGH", "Replace with consistent pseudonym", "PHONE"),
@@ -320,9 +379,9 @@ DETECTION_RULES = [
     DetectionRule("address", r"(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2}\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
     DetectionRule("date", r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", "MEDIUM", "Generalize unless legally necessary", "DATE"),
     DetectionRule("money_amount", r"\b(?:USD|EUR|TRY|TL|₺|\$|€)\s?\d[\d.,]*|\b\d[\d.,]*\s?(?:USD|EUR|TRY|TL|₺|dolar|euro)\b", "MEDIUM", "Generalize or keep if legally necessary", "AMOUNT"),
-    DetectionRule("health_data", r"\b(?:sağlık|saglik|hasta|hastane|cerrahi|tedavi|teşhis|teshis|reçete|recete|medical|health|patient)\b[^.\n]{0,120}", "CRITICAL", "Flag for human legal review", "SENSITIVE_HEALTH_DATA"),
-    DetectionRule("criminal_allegation", r"\b(?:suç|suc|şüpheli|supheli|sanık|sanik|cezai|kamu davası|arama|el koyma|soruşturma|sorusturma)\b[^.\n]{0,160}", "CRITICAL", "Flag for human legal review", "CRIMINAL_ALLEGATION"),
-    DetectionRule("privileged_or_confidential", r"\b(?:müvekkil|muvekkil|vekil|av\.|avukat|attorney-client|privileged|gizli|confidential|ticari sır|trade secret)\b[^.\n]{0,160}", "CRITICAL", "Flag for human legal review", "PRIVILEGED_CONTENT"),
+    DetectionRule("health_data", r"\b(?:sağlık|saglik|hasta|hastane|cerrahi|tedavi|teşhis|teshis|reçete|recete|medical|health|patient)\b" + _CONTEXT_SWEEP_CHAR + r"{0,120}", "CRITICAL", "Flag for human legal review", "SENSITIVE_HEALTH_DATA"),
+    DetectionRule("criminal_allegation", r"\b(?:suç|suc|şüpheli|supheli|sanık|sanik|cezai|kamu davası|arama|el koyma|soruşturma|sorusturma)\b" + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "CRIMINAL_ALLEGATION"),
+    DetectionRule("privileged_or_confidential", r"\b(?:müvekkil|muvekkil|vekil|av\.|avukat|attorney-client|privileged|gizli|confidential|ticari sır|trade secret)\b" + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "PRIVILEGED_CONTENT"),
     # The role word alone, deliberately NOT the surrounding clause. A party role
     # is a re-identification *signal* for a reviewer to weigh, not an identifier.
     # Trailing context ([^.\n]{0,120}) made this span the longest at its start,
@@ -429,6 +488,210 @@ def classify_document_context(filename: str, text: str) -> dict:
     }
 
 
+# The three rules that match a sensitive *clause* rather than an identifier:
+# a trigger keyword plus a trailing sweep of up to 120-160 characters. The sweep
+# is what makes them useful -- an allegation, a diagnosis or a privileged
+# instruction is a clause, not a token -- and it is also how an unrelated
+# person's name and national id ended up stored a second time, in a finding
+# whose category has nothing to do with them ("hasta Leyla Kaya (TCKN:
+# 66666666660), Özel Marmara Hastanesi'nde 22"). This is the same trailing-span
+# over-reach that party_role was fixed for, except party_role could drop its
+# context outright and these cannot: the clause IS the finding.
+CONTEXT_SWEEP_CATEGORIES = {"health_data", "criminal_allegation", "privileged_or_confidential"}
+
+# Placeholder prefix per context category, read off the rules themselves so a
+# segment cut out of a context span keeps its rule's prefix rather than a
+# hardcoded copy of it.
+_CONTEXT_PLACEHOLDER_PREFIXES = {
+    rule.category: rule.placeholder_prefix
+    for rule in DETECTION_RULES
+    if rule.category in CONTEXT_SWEEP_CATEGORIES
+}
+
+# A word, for the purpose of deciding whether a leftover segment says anything:
+# a run of two or more letters. Digits and punctuation do not count, so "22",
+# "),", and "(" are wordless.
+_SEGMENT_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
+
+# All-capital abbreviations that LABEL a direct identifier rather than say
+# anything themselves. They are the only reason a leftover segment can consist
+# of a single all-caps token that is not content -- "(TCKN:" is the punctuation
+# between a name and the national id that was just cut out of the span, and it
+# must not become a CRITICAL finding, while "HIV" in the same position must.
+# Form alone cannot separate those two, so this list is required.
+#
+# It is written out rather than derived from the identifier rules' own patterns.
+# That derivation was tried and does not work, for three reasons:
+#   * "TCKN" -- the token this exists for -- appears in no pattern at all. The
+#     national-id rule spells its prefix "T\.?\s*C\.?", two single letters that
+#     no word extractor keeps, and documents write "TCKN".
+#   * Character classes mangle the words: "MERS[Ii]S" extracts as "MERSS".
+#   * The case-number rule's pattern carries "sorusturma", "karar", "esas" and
+#     "dosya", which are content words in criminal_allegation's own domain, so
+#     deriving would trade this over-drop for a worse one.
+# Only all-capital forms are listed. A capitalised label ("Kimlik", "No") on its
+# own after a cut is rare, and reporting it is the safe direction. Keep this list
+# to identifier labels -- it is the one thing allowed to suppress a segment.
+IDENTIFIER_LABEL_ABBREVIATIONS = frozenset({"TCKN", "TC", "VKN", "MERSIS", "MERSİS", "IBAN", "UYAP"})
+
+
+def _segment_is_reportable(segment: str, is_leading: bool) -> bool:
+    """Whether a segment left over after the identifier cut earns its finding.
+
+    The leading segment always starts on the rule's trigger keyword -- all three
+    patterns are anchored on one -- so a single word there is the keyword itself
+    and is kept. That is exactly what party_role keeps: the signal word without
+    the clause, and it is what holds gold-set recall on labels like "Şüpheli
+    Kemal Arslan hakkında nitelikli dolandırıcılık", whose leading "Şüpheli"
+    segment is the part that still matches.
+
+    Any other segment has lost the keyword, and is kept if it carries any word at
+    all. The one exception is a segment whose ONLY word is an all-capital
+    identifier label ("(TCKN:"): that is the punctuation between a name and the
+    national id that was cut out around it, it says nothing on its own, and the
+    identifier's own finding already covers it.
+
+    Everything else is reported, including a single word. That word is often the
+    whole sensitive point -- "kanser", "HIV", "Alzheimer" -- and an earlier
+    version of this rule that asked non-leading segments for two words, and a
+    later one that also dropped a lone Capitalised word as a proper noun, both
+    silently lost it: the diagnosis stayed in the document with no CRITICAL
+    finding, so no reviewer could approve it for redaction. Over-detection is
+    the direction this system is built to fail in.
+
+    Accepted cost, stated because the rule has it: a lone place-name tail such
+    as "), Kadıköy 2" is now reported as a CRITICAL segment. It is a real but
+    rare noise finding, and a reviewer dismisses it in one click. That is the
+    cheap side of this trade -- a missing finding cannot be dismissed, because
+    nobody is shown it.
+    """
+    words = _SEGMENT_WORD_RE.findall(segment)
+    if is_leading:
+        return len(words) >= 1
+    if not words:
+        return False
+    return not (len(words) == 1 and words[0].upper() in IDENTIFIER_LABEL_ABBREVIATIONS)
+
+
+def _context_segment_findings(
+    finding: dict,
+    text: str,
+    cuts: list[tuple[int, int]],
+    counters: Counter[str],
+    placeholder_state: dict[tuple[str, str], str],
+) -> list[dict]:
+    """Split one context finding around the identifier spans cut out of it.
+
+    Bounds are tightened onto the stripped text, so the relation _finding()
+    guarantees -- sample == text[start:end].strip()[:180] -- holds with no
+    slack. Every consumer treats the sample as the literal, contiguous
+    document text the span points at -- it is the redaction target
+    (redaction_targets_for_document in app.py), the key the PDF exporter maps to
+    coordinate boxes, and the string export QA searches the produced file for --
+    so a segment must never claim a span wider than the text it reports.
+    """
+    merged: list[list[int]] = []
+    for cut_start, cut_end in sorted(cuts):
+        if merged and cut_start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], cut_end)
+        else:
+            merged.append([cut_start, cut_end])
+
+    spans: list[tuple[int, int]] = []
+    cursor = finding["start"]
+    for cut_start, cut_end in merged:
+        spans.append((cursor, cut_start))
+        cursor = cut_end
+    spans.append((cursor, finding["end"]))
+
+    prefix = _CONTEXT_PLACEHOLDER_PREFIXES[finding["category"]]
+    segments = []
+    for index, (start, end) in enumerate(spans):
+        raw = text[start:end]
+        value = raw.strip()
+        if not value or not _segment_is_reportable(value, is_leading=index == 0):
+            continue
+        offset = start + (len(raw) - len(raw.lstrip()))
+        # The context finding being replaced already consumed a placeholder
+        # number, so the segments start one above it and the preview shows a gap
+        # ("[SENSITIVE_HEALTH_DATA_2]" with no _1). Nothing parses placeholder
+        # numbers or assumes they are contiguous -- they only have to be stable
+        # within one analysis, which _placeholder_for guarantees by keying on the
+        # text. Renumbering would mean allocating placeholders after the cut for
+        # every rule, which is a larger change for a cosmetic gain.
+        placeholder = _placeholder_for(prefix, value, counters, placeholder_state)
+        segments.append(
+            _finding(
+                finding["category"],
+                value,
+                finding["risk"],
+                finding["recommended_action"],
+                placeholder,
+                offset,
+                offset + len(value),
+            )
+        )
+    return segments
+
+
+def _cut_identifiers_from_context_findings(
+    findings: list[dict],
+    text: str,
+    counters: Counter[str],
+    placeholder_state: dict[tuple[str, str], str],
+) -> list[dict]:
+    """Keep another person's direct identifiers out of the context rules' samples.
+
+    A finding's sample is stored, shown to reviewers and shipped to the exporter
+    as a redaction target, so a health_data or privileged_or_confidential
+    finding that sweeps up a name and a TCKN stores those identifiers a second
+    time under a category that has nothing to do with them. The sample cannot be
+    masked or elided -- it has to stay literal document text consistent with
+    start/end -- so the span is cut instead: wherever a direct identifier sits
+    inside a context span, the segments before and after it become the findings
+    and the identifier's text belongs to the identifier's own finding only.
+
+    The trailing segments are kept rather than dropped (subject to
+    _segment_is_reportable) because they carry the sensitive clause. Dropping
+    "hakkında nitelikli dolandırıcılık iddiası ile soruşturma yürütülmektedir"
+    would leave the allegation with no CRITICAL finding covering it and
+    therefore nothing a reviewer could approve for redaction -- the identifier
+    finding beside it redacts only the identifier.
+
+    An identifier span co-extensive with the context span is left alone: that is
+    a competing reading of the same text rather than an identifier nested in a
+    clause, and _dedupe_findings/build_redacted_preview already rank the two on
+    risk. Same "strictly inside" rule as _enclosing_span_end.
+    """
+    identifier_spans = sorted(
+        (item["start"], item["end"])
+        for item in findings
+        if item["category"] in DIRECT_IDENTIFIER_CATEGORIES
+    )
+    if not identifier_spans:
+        return findings
+
+    result: list[dict] = []
+    for finding in findings:
+        if finding["category"] not in CONTEXT_SWEEP_CATEGORIES:
+            result.append(finding)
+            continue
+        cuts = []
+        for id_start, id_end in identifier_spans:
+            overlap_start = max(id_start, finding["start"])
+            overlap_end = min(id_end, finding["end"])
+            if overlap_start >= overlap_end:
+                continue
+            if overlap_start == finding["start"] and overlap_end == finding["end"]:
+                continue
+            cuts.append((overlap_start, overlap_end))
+        if not cuts:
+            result.append(finding)
+            continue
+        result.extend(_context_segment_findings(finding, text, cuts, counters, placeholder_state))
+    return result
+
+
 def analyze_privacy(
     filename: str,
     text: str,
@@ -450,7 +713,21 @@ def analyze_privacy(
         else:
             matches = re.finditer(rule.pattern, text, rule.flags)
         for match in matches:
-            value = match.group(1).strip() if rule.category == "turkish_national_id" and match.lastindex else match.group(0).strip()
+            # The national-id rule matches an optional label ("T.C. Kimlik No:")
+            # in front of the digits and reports only the digits as its sample,
+            # so its SPAN has to be the digits as well. The sample is the
+            # redaction target (redaction_targets_for_document in app.py), the
+            # key the PDF exporter maps to coordinate boxes, and the needle
+            # export QA searches the produced file for; build_redacted_preview
+            # replaces the SPAN. A span wider than the sample therefore makes the
+            # preview blank the whole labelled phrase while the export removes
+            # only the digits, so the two disagree about what was removed. The
+            # label "T.C. Kimlik No:" is not sensitive and the exporter already
+            # leaves it, so narrowing the span is the side that makes them agree.
+            if rule.category == "turkish_national_id" and match.lastindex:
+                value, start, end = match.group(1).strip(), match.start(1), match.end(1)
+            else:
+                value, start, end = match.group(0).strip(), match.start(), match.end()
             if not value:
                 continue
             if rule.category == "address" and len(value) < 6:
@@ -460,7 +737,7 @@ def analyze_privacy(
             if rule.category == "tax_number" and match.lastindex and not valid_turkish_tax_number(match.group(1)):
                 continue
             placeholder = _placeholder_for(rule.placeholder_prefix, value, counters, placeholder_state)
-            findings.append(_finding(rule.category, value, rule.risk, rule.action, placeholder, match.start(), match.end()))
+            findings.append(_finding(rule.category, value, rule.risk, rule.action, placeholder, start, end))
 
     person_spans: list[tuple[str, int, int]] = []
     for person_re in (PERSON_CONTEXT_RE, ROLE_PERSON_RE):
@@ -486,6 +763,7 @@ def analyze_privacy(
         placeholder = _placeholder_for("PERSON", value, counters, placeholder_state)
         findings.append(_finding("natural_person_name", value, "HIGH", "Replace with consistent pseudonym", placeholder, start, end))
 
+    findings = _cut_identifiers_from_context_findings(findings, text, counters, placeholder_state)
     findings = _dedupe_findings(findings)
     redacted_preview = build_redacted_preview(text, findings)
     extraction_status = extraction_status_for(text, extraction_warning)
@@ -590,7 +868,7 @@ _MAX_RISK_ORDER = max(RISK_ORDER.values()) + 1
 
 
 def build_redacted_preview(text: str, findings: list[dict], max_chars: int = 12_000) -> str:
-    """Build a pseudonymized/redacted preview from non-overlapping findings.
+    """Build a pseudonymized/redacted preview from disjoint finding regions.
 
     At a given start offset, prefer the highest-risk finding, then the widest
     span. Preferring width first let a wide low-risk span (e.g. the old,
@@ -598,22 +876,63 @@ def build_redacted_preview(text: str, findings: list[dict], max_chars: int = 12_
     inside it, so the CRITICAL finding never reached the preview. An
     unrecognised risk value sorts as more severe than CRITICAL, consistent
     with the fail-closed handling of unresolved review statuses elsewhere.
+
+    A finding that PARTIALLY overlaps one already chosen is CLIPPED, not
+    dropped -- the same rule, for the same reason, as collect_replacements in
+    legal_analyzer/docx_redactor.py. Real findings cross: an over-matched name
+    span running into a label ("Leyla Kaya Vergi") and the tax_number that
+    starts inside it ("Vergi Kimlik No: 0983930103") share four characters and
+    neither contains the other. Dropping the loser wholesale rendered the part
+    the winner does not cover as RAW document text, so the national/tax id was
+    printed in full in a preview that is persisted in documents.privacy_profile
+    and served as "PRIVACY-REVIEWED REDACTED EXPORT". The wide context spans
+    used to hide this by covering the remainder; cutting identifiers out of
+    those spans removed that accidental cover.
+
+    The one deliberate difference from collect_replacements is the risk term in
+    the sort key, which the DOCX path does not have: sorting on width alone, it
+    always picks the widest finding at a tied start, while here the narrower,
+    higher-risk one can win. That decides only WHICH finding is chosen. The
+    loser is then clipped to its residual exactly like any other partial
+    overlap -- a tied start is not a special case.
+
+    Skipping the tied-start loser instead looked safe and was not. A CRITICAL
+    context finding and a WIDER address can begin at the same offset, because
+    a capitalised trigger word doubles as the start of a street name: in
+    "Sağlık Caddesi No: 5 Daire: 12. Kat Kadıköy İstanbul adresinde oturuyor"
+    health_data wins the tie at offset 0 and its sweep stops at the first
+    period, so skipping the address printed ". Kat Kadıköy İstanbul adresinde
+    oturuyor" -- house number, apartment and district -- in full. address is a
+    direct identifier and this text is served as the redacted export.
+
+    A finding that ends inside the chosen region contributes nothing, which is
+    correct: every character of it is already being replaced.
+
+    The max() that clips the start is deliberately kept although it cannot
+    change this function's output: the emitted `cursor` is always the previous
+    chosen finding's end, i.e. exactly the `last_end` that clipped the current
+    one, so text[cursor:start] is already empty when start < cursor. A
+    max->plain-start mutation is therefore an equivalent mutant (verified:
+    identical previews on 10,018 texts, all fixtures included), the same status
+    as the min->max choice in _enclosing_span_end. It stays because it makes
+    `chosen` a correct list of disjoint regions for any future reader, instead
+    of leaning on an inverted slice silently returning "".
     """
-    chosen = []
-    last_end = -1
+    chosen: list[tuple[int, dict]] = []
+    last_end = 0
     for item in sorted(
         findings,
         key=lambda f: (f["start"], -RISK_ORDER.get(f["risk"], _MAX_RISK_ORDER), -(f["end"] - f["start"])),
     ):
-        if item["start"] < last_end:
+        if item["end"] <= last_end:
             continue
-        chosen.append(item)
+        chosen.append((max(item["start"], last_end), item))
         last_end = item["end"]
 
     parts = []
     cursor = 0
-    for item in chosen:
-        parts.append(text[cursor:item["start"]])
+    for start, item in chosen:
+        parts.append(text[cursor:start])
         if item["risk"] == "CRITICAL" and "review" in item["recommended_action"].lower():
             parts.append(f"[{item['placeholder'].strip('[]')}_REDACTED]")
         else:

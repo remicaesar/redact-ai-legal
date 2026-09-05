@@ -403,6 +403,13 @@ class RedactedPreviewSpanOrderingTests(unittest.TestCase):
     now-removed wide party_role span is the historical example) could then
     outrank a CRITICAL identifier nested inside it, so the CRITICAL finding
     never reached the preview at all.
+
+    The guarded property is that the CRITICAL reaches the preview and none of
+    its text survives -- NOT that the wider finding is absent. The wider one now
+    contributes a placeholder for the part of its span the CRITICAL does not
+    cover, which is what clipping does for every other overlap. Forbidding that
+    residual was stricter than this regression, and it was load-bearing in the
+    wrong direction: it kept a tied-start address from being redacted at all.
     """
 
     def test_nested_critical_beats_wider_lower_risk_span_at_same_start(self):
@@ -430,8 +437,96 @@ class RedactedPreviewSpanOrderingTests(unittest.TestCase):
         ]
         text = "22222222220 numaralı kişi hakkında işlem yapılmıştır."
         preview = build_redacted_preview(text, findings)
+
+        # The CRITICAL wins the tied start: it reaches the preview, and it
+        # reaches it first.
         self.assertIn("[NATIONAL_ID_1]", preview)
-        self.assertNotIn("[PARTY_ROLE_1]", preview)
+        self.assertTrue(preview.startswith("[NATIONAL_ID_1]"), preview)
+        # No character of the CRITICAL's span survives.
+        self.assertNotIn("22222222220", preview)
+        for offset in range(0, 11 - 3):
+            self.assertNotIn(text[offset:11], preview)
+
+
+class ContextSweepAbbreviationTests(unittest.TestCase):
+    """The three context sweeps must run through "T.C." and still stop at a period.
+
+    health_data, criminal_allegation and privileged_or_confidential match a
+    trigger keyword plus a trailing sweep. The sweep used to be [^.\n]{0,N},
+    which stopped at the FIRST period of "T.C.", so in "hasta Leyla Kaya T.C.
+    Kimlik No: 10000000146 kanser" the match ended at "Kaya T" and the diagnosis
+    after the identifier had no finding of any kind -- and a span with no
+    finding cannot be approved by a reviewer, so it is unredactable on export by
+    construction. The sweep now allows a period that follows a single capital
+    letter, and nothing else, so a real sentence boundary still ends it.
+    """
+
+    ABBREVIATION_CASES = (
+        ("health_data", "hasta Leyla Kaya T.C. Kimlik No: 10000000146 kanser", "kanser"),
+        ("criminal_allegation", "şüpheli Kemal Arslan T.C. Kimlik No: 10000000146 dolandırıcılık", "dolandırıcılık"),
+        ("privileged_or_confidential", "müvekkil Cemile Doğan T.C. Kimlik No: 10000000146 stratejisi", "stratejisi"),
+    )
+
+    BOUNDARY_CASES = (
+        ("health_data", "hasta iyileşti. Yeni cümle Ahmet Yılmaz"),
+        ("criminal_allegation", "şüpheli yakalandı. Yeni cümle Ahmet Yılmaz"),
+        ("privileged_or_confidential", "müvekkil ile görüşüldü. Yeni cümle Ahmet Yılmaz"),
+    )
+
+    def covering(self, findings: list[dict], category: str, text: str, word: str) -> list[dict]:
+        start = text.index(word)
+        end = start + len(word)
+        return [
+            finding
+            for finding in findings
+            if finding["category"] == category and finding["start"] <= start and finding["end"] >= end
+        ]
+
+    def test_sweep_reaches_the_clause_after_an_abbreviation(self):
+        for category, text, word in self.ABBREVIATION_CASES:
+            with self.subTest(category=category):
+                findings = analyze_privacy("dilekce.txt", text)["risk_map"]
+
+                covering = self.covering(findings, category, text, word)
+                self.assertEqual(len(covering), 1, findings)
+                self.assertEqual(covering[0]["risk"], "CRITICAL")
+
+    def test_a_lowercase_single_letter_is_not_an_abbreviation(self):
+        """The abbreviation exception is capitals only, under a rule that ignores case.
+
+        These rules carry re.IGNORECASE, so an unscoped [A-ZÇĞİÖŞÜ] in the
+        lookbehind would match any letter and let a period after a one-letter
+        lowercase word through the stop. The exception is scoped with (?-i:...)
+        to keep that from happening.
+
+        The assertion is on "Yeni cümle", not on the name: a person name is a
+        direct identifier, so _cut_identifiers_from_context_findings removes it
+        from the context span however far the sweep ran. Asserting only that no
+        context finding covers the NAME therefore passes even when the sweep has
+        crossed the boundary -- measured, that is exactly what the unscoped
+        variant does here.
+        """
+        text = "hasta b. Yeni cümle Ahmet Yılmaz"
+        findings = analyze_privacy("dilekce.txt", text)["risk_map"]
+
+        self.assertTrue([f for f in findings if f["category"] == "health_data"], findings)
+        self.assertEqual(self.covering(findings, "health_data", text, "Yeni cümle"), [])
+        self.assertEqual(self.covering(findings, "health_data", text, "Ahmet"), [])
+
+    def test_sweep_still_stops_at_a_sentence_boundary(self):
+        for category, text in self.BOUNDARY_CASES:
+            with self.subTest(category=category):
+                findings = analyze_privacy("dilekce.txt", text)["risk_map"]
+
+                # The rule must still fire on the first sentence, or this would
+                # pass simply because the category stopped being detected.
+                self.assertTrue([f for f in findings if f["category"] == category], findings)
+                # "Yeni cümle" is the load-bearing half: the name is a direct
+                # identifier and _cut_identifiers_from_context_findings takes it
+                # out of the context span however far the sweep ran, so the name
+                # assertion alone can pass over a sweep that did cross.
+                self.assertEqual(self.covering(findings, category, text, "Yeni cümle"), [])
+                self.assertEqual(self.covering(findings, category, text, "Ahmet"), [])
 
 
 if __name__ == "__main__":
