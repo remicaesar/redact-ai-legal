@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from .docx_redactor import TURKISH_I_FORMS
 from .taxonomy import OUTPUT_POSITIONING, TERMINOLOGY
 
 from legal_analyzer.turkish_names import COMPANY_SUFFIX_RE, detect_person_names
@@ -275,8 +276,10 @@ GENERIC_COURT_SUFFIX_RULE = DetectionRule(
 
 # One character of the trailing sweep used by health_data, criminal_allegation
 # and privileged_or_confidential. It is "any character except a newline or a
-# period", with ONE exception: a period that follows a single capital letter,
-# which is how an abbreviation is written ("T.C.", "A.Ş.").
+# period", with three exceptions, each for a period that does NOT end a
+# sentence: after a single capital letter ("T.C.", "A.Ş."), between two digits
+# ("22.09.2025"), and after one of a short enumerated list of lowercase
+# abbreviations ("Ltd. Şti.", "vb.", "Av."). Each is justified below.
 #
 # The plain [^.\n] class stopped the sweep at the first period of "T.C.", so in
 # "hasta Leyla Kaya T.C. Kimlik No: 10000000146 kanser" the match ended at
@@ -307,30 +310,221 @@ GENERIC_COURT_SUFFIX_RULE = DetectionRule(
 # missed CRITICAL clause has none of those consolations -- no reviewer is shown
 # it, so nobody can approve it for redaction.
 #
-# Two shapes deliberately stay stops, because widening to them is a separate
-# change with its own measurement and they are not what this fixes. Both
-# still cost a reachable CRITICAL miss, recorded here so the residual scope
-# is on the record rather than implied away:
-#   * any lowercase abbreviation -- titles ("Av.", "Dr."), and the ubiquitous
-#     "Ltd. Şti." and "vb." -- because their period follows a lowercase
-#     letter. The clause after "... Ltd. Şti. <diagnosis>" is uncovered.
-#   * a period after a digit, as in a date ("22.09.2025") or an ordinal
-#     institution name ("Kadıköy 2. Noterliği"), which the address rule does
-#     allow via its own (?<=\d)\. exception. Allowing it here lengthens all
-#     three CRITICAL context spans across dates and pulls an authority name
-#     into a privileged_or_confidential sample, which is the direction the
-#     identifier cut was added to move away from. Measured: it breaks the
-#     pinned samples in test_only_the_identifier_label_fragment_is_discarded,
-#     test_privileged_sample_keeps_no_client_identifier and
-#     test_address_tied_with_a_narrower_critical_is_not_printed. The cost of
-#     leaving it out is the commonest medical-filing shape: in
-#     "hasta Leyla Kaya 22.09.2025 tarihinde kanser tespit edildi" the
-#     diagnosis has no finding. Identical at base, so not a regression; it is
-#     the same defect class this exception fixes for "T.C.", and needs its own
-#     handling of the three pinned samples rather than a blanket allowance.
 # Also asymmetric, harmlessly: "I." is crossed (word boundary before the
 # single capital) while "II." is not (no boundary before the second I).
-_CONTEXT_SWEEP_CHAR = r"(?:[^.\n]|(?<=\b(?-i:[A-ZÇĞİÖŞÜ]))\.)"
+#
+# The single-capital exception left two shapes as stops, and both cost the same
+# reachable CRITICAL miss it was written to fix. They are exceptions two and
+# three, added here with their own measurements.
+#
+# TWO: a date's period. The address rule has always allowed a period after a
+# digit via a plain (?<=\d)\., but copying that verbatim is what made this a
+# separate change: it also crosses an ordinal institution name, so
+# "Müvekkil ... Kadıköy 2. Noterliği onaylı örneği" starts storing an authority
+# name in a privileged_or_confidential sample -- the direction the identifier
+# cut was added to move AWAY from. The two are separable on one character:
+# a date's period sits BETWEEN digits ("22.09.2025") while an ordinal's is
+# followed by a space ("Kadıköy 2. Noterliği"). (?<=\d)\.(?=\d) therefore
+# crosses the date and leaves the ordinal a stop. Verified against all three
+# pinned samples: the privileged one and the tied-address one are unchanged;
+# only the medical one grows, across a date and no further, because the
+# newline after "22.09.2025" stops the sweep.
+#
+# THREE: a lowercase abbreviation -- "Ltd. Şti.", "vb.", "Av.", "Dr.", the
+# street-address forms -- whose period follows a lowercase letter and so gets
+# no help from the single-capital rule. The clause after
+# "Müvekkil Yıldız Ltd. Şti. ile gizli görüşme" was uncovered.
+#
+# These are ENUMERATED rather than generalised to "any short token", because a
+# general rule would cross the period after every short sentence-final word. A
+# variable-width alternation cannot go inside ONE lookbehind -- Python's re
+# rejects it with "look-behind requires fixed-width pattern" -- so each entry
+# gets its own fixed-width lookbehind, joined as alternatives.
+#
+# Each entry is case-insensitive: filings write "Ltd. Şti." in body text,
+# "LTD. ŞTİ." in headers and "ltd. şti." when sloppy.
+#
+# The i-family letters are spelled out rather than left to (?i:). Python does
+# relate i/I/ı/İ under IGNORECASE -- measured, not assumed -- but
+# docx_redactor.py refuses to depend on that, calling it "an undocumented
+# implementation detail: nothing in the re documentation promises 'I' will keep
+# matching 'ı'", and enumerates TURKISH_I_FORMS by hand instead. The same
+# argument applies here and the consequence is the same kind: if that folding
+# ever narrows, "ŞTİ." stops being crossed and the clause after it loses the
+# CRITICAL finding this exception exists to give it. "Şti" is the only entry
+# containing an i-family letter, so the cost of taking the house rule's side is
+# one expanded string, and _i_forms() below is what expands it.
+#
+# What each entry costs cannot be read off the gold set: 14 of the 15
+# candidates appear zero times in it, and adding all of them singly or together
+# moves gold-set precision by 0.0000. Priced on generated probes instead, the
+# same way the single-capital exception was: each entry buys the clause after
+# its own mid-sentence use (36/48 probes) and costs a crossing when a sentence
+# genuinely ends on it (48/48) -- the A.Ş. trade above, unchanged in kind.
+#
+# Two candidates were dropped, because for them the sentence-final position is
+# ordinary prose rather than a typographic coincidence:
+#   * "No" -- English "no." ends sentences routinely and these rules run on
+#     English documents too ("medical", "patient", "privileged" are triggers).
+#     Its buy is thin: the common address form is "Sok. No: 5", already crossed
+#     via "Sok" with no period after "No", and what follows "Esas No." is a
+#     case number, a direct identifier the cut removes from the span anyway.
+#   * "age" -- English "age." ends sentences, and the Turkish "a.g.e." is
+#     written with a dot after every letter, so the single-token form this
+#     would target is rare.
+_CONTEXT_SWEEP_ABBREVIATIONS = (
+    "Ltd", "Şti",              # "Yıldız Ltd. Şti." -- both, since each stops the other
+    "vb", "vs",                # "ve benzeri" / "vesaire"; "vs." is also English "versus"
+    "Av", "Dr", "Prof", "Doç",  # professional titles, always followed by a name
+    "Sok", "Cad", "Mah", "Apt",  # street-address structure words
+    "Bkz",                     # "bakınız"; always followed by the reference
+)
+
+def _i_forms(abbreviation: str) -> str:
+    """Spell an abbreviation as a class-per-character, expanding the i-family.
+
+    Every character becomes a class holding both its cases, and any of i/I/ı/İ/î/Î
+    becomes a class holding all of them -- so "Şti" matches "ŞTİ", "ŞTI", "şti"
+    and "ştı" without asking re.IGNORECASE to relate the dotted and dotless
+    letters. Fixed width per character, which the lookbehind requires.
+
+    CONSTRAINT ON CALLERS: pass only characters whose case mapping stays a
+    single character. str.upper()/str.lower() can WIDEN one -- 'ß'.upper() is
+    'SS' and 'İ'.lower() is 'i' plus a combining dot, two characters -- and a
+    multi-character form dropped into a class below silently changes what that
+    class matches, and breaks the fixed width the sweep's lookbehind needs.
+    case_variants() in docx_redactor.py filters on len(form) == 1 for exactly
+    this reason; this helper does not, because it is built for the abbreviation
+    and legal-suffix vocabularies below, where nothing widens (verified over
+    _CONTEXT_SWEEP_ABBREVIATIONS and every company suffix word: zero widening
+    characters, and 'İ' is taken by the i-family branch before .lower() is ever
+    called on it).
+
+    The note is here rather than in a commit message because this helper has
+    already grown one caller beyond the fixed abbreviation tuple it was written
+    for -- the company_name suffixes -- and the next caller will read this
+    docstring, not the history.
+    """
+    parts = []
+    for char in abbreviation:
+        if char in TURKISH_I_FORMS:
+            parts.append("[" + "".join(sorted(TURKISH_I_FORMS)) + "]")
+        else:
+            forms = {char, char.upper(), char.lower()}
+            parts.append("[" + "".join(sorted(forms)) + "]")
+    return "".join(parts)
+
+
+_CONTEXT_SWEEP_CHAR = "(?:" + "|".join(
+    [
+        r"[^.\n]",
+        r"(?<=\b(?-i:[A-ZÇĞİÖŞÜ]))\.",
+        r"(?<=\d)\.(?=\d)",
+    ]
+    + [rf"(?<=\b{_i_forms(abbreviation)})\." for abbreviation in _CONTEXT_SWEEP_ABBREVIATIONS]
+) + ")"
+
+
+# --- company_name legal-form suffixes -------------------------------------
+#
+# The company_name rule is the ONE rule that runs without re.IGNORECASE, and
+# that is deliberate. Do not "fix" it by adding the flag back: its leading
+# [A-ZÇĞİÖŞÜ] class is what keeps a match from starting on a lowercase letter
+# in the middle of a word, and IGNORECASE folds that class too, so
+# "davali yildiz ltd. sti. adresinde" would start matching. The suffixes below
+# therefore carry their own case classes instead of inheriting the flag, which
+# leaves the leading class case-sensitive by construction -- no (?-i:) scope to
+# get lost in a later edit.
+#
+# Every suffix is built through _i_forms(), for the reason docx_redactor.py
+# gives at length: CPython's re does relate 'I' to 'ı' and 'İ' to 'i' under
+# IGNORECASE, but that is an undocumented property of sre's internal
+# equivalence table, not something the re documentation promises. Inheriting it
+# here is worse than inheriting it in the context sweep, not better. company_name
+# is in DIRECT_IDENTIFIER_CATEGORIES, so if that folding ever narrows, a company
+# written "Ltd. Şti." stops matching, has_direct_identifiers() goes quiet, and
+# the external-LLM gate silently loses one of its six arms -- which is precisely
+# the bug this construction was written to close.
+#
+# _i_forms() spells both cases of every character and the whole i-family for
+# i/I/ı/İ, so "ANONİM" also covers the diacritic-free "ANONIM" for free. It does
+# NOT relate 'Ş' to 'S', so the s-forms are spelled out here: Turkish is
+# routinely typed without diacritics ("LIMITED SIRKETI"), and matching only the
+# cedilla ships the other spelling.
+_S_FORMS = "[SsŞş]"
+_SIRKETI = _S_FORMS + _i_forms("İRKETİ")
+_STI = _S_FORMS + _i_forms("Tİ")
+
+# The uppercase members of the i-family, for a suffix whose INITIAL is an i
+# ("Inc." in English, "İnc" if it is ever typed with the Turkish dotted capital).
+_UPPER_I_FORMS = "[IİÎ]"
+
+# ONE criterion decides how wide each alternative below is folded, and it is
+# applied uniformly:
+#
+#   a suffix whose all-lowercase spelling OCCURS AS A TOKEN IN ORDINARY PROSE
+#   keeps an uppercase initial; a suffix that collides with nothing folds
+#   completely.
+#
+# "occurs as a token", not "is a word", and the difference is load-bearing.
+# Neither "ltd" nor "plc" is a dictionary word, so the word phrasing prescribes
+# folding both -- and measured, folding them is wrong: "The device uses a plc
+# module" and "Belge ltd olarak kaydedildi" become company findings. ("plc" is
+# a programmable logic controller, ordinary vocabulary in the technical annexes
+# attached to commercial filings.) Both are pinned in PROSE_PROBES, because
+# review measured that folding either initial otherwise survives the whole
+# suite.
+#
+# This is not fussiness. Fully folded, "limited" matches ordinary English legal
+# prose -- "Damages are limited by the terms herein", "Liability is limited to
+# the fees paid" -- and this engine runs on English documents by design. Each
+# such match is a HIGH finding in a category that IS a direct identifier, so it
+# asserts an identifier is present where there is none and offers "Damages are
+# limited" to the exporter as a redaction target. It fails safe rather than
+# leaking, but a review queue full of spurious HIGH direct-identifier findings
+# is exactly the fatigue the false-positive work exists to prevent. Measured:
+# eleven English/Turkish prose probes went from 0 matches to 11.
+#
+# The same criterion, same measurement, catches the generic Turkish
+# company-FORM phrases: fully folded, "Taraflar bir anonim şirketi kurmuştur"
+# ("the parties founded a joint-stock company") is flagged as a named company.
+# An uppercase initial on the two-word forms removes those too.
+#
+# What this gives up is the all-lowercase spelling of the six word-shaped
+# suffixes: "Yıldız limited", "Yildiz anonim sirketi", "Acme plc". Those are
+# precisely the spellings that collide with prose, so the two cannot both be
+# had. The compound and dotted forms below -- "ltd. şti.", "llc", "a.ş." --
+# collide with no word in either language and therefore stay fully folded, so
+# the sloppily-typed company spellings that DO occur are still caught.
+#
+# Order is load-bearing. The body of the rule is lazy, so at a given position
+# the FIRST alternative that matches wins and the rest of the suffix is left
+# outside the finding. Two-word forms must therefore precede the bare ones, or
+# "LOJİSTİK LİMİTED ŞİRKETİ" ends its span at "LİMİTED" and the reviewer
+# approves a span that stops short of the identifier.
+_COMPANY_SUFFIXES = (
+    "A" + _i_forms("NONİM") + " " + _SIRKETI,
+    "L" + _i_forms("İMİTED") + " " + _SIRKETI,
+    # Fully folded: neither "ltd" nor "şti"/"sti" is a word.
+    _i_forms("LTD") + r"\.?\s*" + _STI + r"\.?",
+    "L" + _i_forms("İMİTED"),
+    "L" + _i_forms("TD") + r"\.?",
+    "P" + _i_forms("LC"),
+    _UPPER_I_FORMS + _i_forms("NC") + r"\.?",
+    # "A.Ş." folds for case ("a.ş.") but keeps the cedilla REQUIRED. The
+    # diacritic-free twin "A.S." is left out on measured evidence, not on
+    # taste: Turkish courts anonymise parties to their initials, so "A.S." is
+    # far more often a redacted person than a company. Adding it flagged
+    # "Müşteki A.S. beyanında bulunmuştur" and "tanık A.S." as company names.
+    _i_forms("A") + r"\.[Şş]\.",
+    # Bare "AŞ" stays UPPERCASE-ONLY, the same criterion again and also
+    # measured: folded to [Aa][Şş] it matches the ordinary Turkish word "aş",
+    # and flagged "Belediye aş", "Kurum aş" and "sıcak aş" as companies. The
+    # dotted form above covers the running-text spelling.
+    r"AŞ",
+    # Fully folded: "llc" is not a word.
+    _i_forms("LLC"),
+)
 
 DETECTION_RULES = [
     DetectionRule("email_address", r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "HIGH", "Replace with consistent pseudonym", "EMAIL"),
@@ -399,7 +593,9 @@ DETECTION_RULES = [
     DetectionRule("court_or_authority", r"\b\d{1,2}\.\s*(?:Asliye|Ağır\s+Ceza|Agir\s+Ceza|Sulh|İdare|Idare|Ticaret|İş|Is|Aile|İcra|Icra|Hukuk|Ceza|Vergi)(?:\s+(?:Hukuk|Ceza|Ticaret|İş|Is|Aile|Mahkemesi|Dairesi|Müdürlüğü|Mudurlugu|Hakimliği|Hakimligi)){1,3}\b", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
     DetectionRule("court_or_authority", r"\b\d{1,2}\.\s*Noterli[ğg]i\b", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
     DetectionRule("court_or_authority", r"\b(?:Yargıtay|Yargitay|Danıştay|Danistay|Anayasa\s+Mahkemesi|Bölge\s+Adliye\s+Mahkemesi|Bolge\s+Adliye\s+Mahkemesi|Bölge\s+İdare\s+Mahkemesi|Bolge\s+Idare\s+Mahkemesi)\b[^.\n]{0,60}", "HIGH", "Replace with consistent pseudonym or generalize", "COURT_AUTHORITY"),
-    DetectionRule("company_name", r"\b[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9&.,'\- ]{2,90}?\s(?:ANONİM ŞİRKETİ|ANONIM SIRKETI|LİMİTED ŞİRKETİ|LIMITED SIRKETI|LTD\.?\s*ŞT[İI]\.?|LIMITED|LTD\.?|PLC|INC\.?|A\.Ş\.|AŞ|LLC)(?!\w)", "HIGH", "Replace with consistent pseudonym", "COMPANY", flags=re.UNICODE),
+    # flags=re.UNICODE, i.e. no IGNORECASE, on purpose -- see the
+    # _COMPANY_SUFFIXES block above before changing it.
+    DetectionRule("company_name", r"\b[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9&.,'\- ]{2,90}?\s(?:" + "|".join(_COMPANY_SUFFIXES) + r")(?!\w)", "HIGH", "Replace with consistent pseudonym", "COMPANY", flags=re.UNICODE),
 ]
 
 PERSON_CONTEXT_RE = re.compile(

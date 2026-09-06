@@ -143,10 +143,32 @@ class TurkishLegalDetectionTests(unittest.TestCase):
         self.assertTrue(any("3. Sulh Ceza Hakimliği" in sample for sample in samples), samples)
 
     def test_detects_titlecase_and_limited_sirketi_companies(self):
-        text = "Alacaklı Verdi Faktoring A.Ş. ile KARTAL LOJİSTİK LİMİTED ŞİRKETİ anlaşmıştır."
+        """Title case here means the SUFFIX, which is the only part case decides.
+
+        This case used to read "Alacaklı Verdi Faktoring A.Ş. ile KARTAL
+        LOJİSTİK LİMİTED ŞİRKETİ" and asserted on those two spans. Both
+        suffixes in it were UPPERCASE -- "A.Ş." and "LİMİTED ŞİRKETİ" -- and
+        the company_name rule only ever case-matched on the suffix, so the
+        title-case leading words ("Verdi Faktoring") exercised nothing. The
+        name claimed a property the rule did not have, and it passed anyway.
+
+        The first company below now carries a title-case suffix, which is the
+        form the rule actually used to miss. The second keeps the all-caps
+        spelling so the case that always worked stays covered.
+
+        The assertion is on the EXACT sample set, not on "substring in sample",
+        and that is load-bearing. With a title-case suffix invisible to it, the
+        rule matched this sentence as ONE span running from the first company
+        straight through to the all-caps one, and a single sample holding both
+        names satisfies a substring check twice over. Written that way the case
+        passed with the bug still in place -- measured, not supposed.
+        """
+        text = "Alacaklı: Kartal Lojistik Limited Şirketi ile MERKEZ İNŞAAT LİMİTED ŞİRKETİ anlaşmıştır."
         samples = self.samples_for(text, "company_name")
-        self.assertTrue(any("Verdi Faktoring A.Ş." in sample for sample in samples), samples)
-        self.assertTrue(any("KARTAL LOJİSTİK LİMİTED ŞİRKETİ" in sample for sample in samples), samples)
+        self.assertEqual(
+            sorted(samples),
+            sorted(["Kartal Lojistik Limited Şirketi", "MERKEZ İNŞAAT LİMİTED ŞİRKETİ"]),
+        )
 
     def test_detects_company_suffix_at_line_end(self):
         samples = self.samples_for("Davalı işveren EGE TEKSTİL SANAYİ A.Ş.\nnezdinde çalışmıştır.", "company_name")
