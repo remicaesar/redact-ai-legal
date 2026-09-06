@@ -844,6 +844,16 @@ class ContextSweepNonSentencePeriodTests(unittest.TestCase):
         ("bkz.", "health_data",
          "hasta olan kişi bkz. ekli raporda kanser tanısı aldı",
          "kanser tanısı aldı"),
+        # The cedilla-free twin of the "Ltd. Şti." row above. Turkish is
+        # routinely typed without diacritics, and _i_forms() deliberately does
+        # NOT relate 'Ş' to 'S' -- the company suffixes spell that fold out by
+        # hand as _S_FORMS for exactly this reason. Without a "Sti" entry the
+        # sweep stops at the period this row's clause sits behind, and the
+        # allegation after it carries no finding at all: nothing a reviewer can
+        # approve, so nothing the exporter will redact.
+        ("Ltd. Sti. without the cedilla", "privileged_or_confidential",
+         "Müvekkil: Yıldız Ltd. Sti. ile görüşme tutanağı düzenlendi",
+         "görüşme tutanağı düzenlendi"),
     )
 
     def test_the_clause_after_a_non_sentence_period_gets_a_critical_finding(self):
@@ -905,6 +915,41 @@ class ContextSweepNonSentencePeriodTests(unittest.TestCase):
                     self.of_category(findings, category),
                 )
 
+    def test_english_sti_sentence_end_is_crossed_as_an_accepted_cost(self):
+        """Pins what the "Sti" entry COSTS, not what it buys.
+
+        "STI." ends English sentences -- sexually transmitted infection -- and
+        it does so in the documents health_data runs on, whose triggers include
+        the English "medical" and "patient". So unlike every other entry in
+        _CONTEXT_SWEEP_ABBREVIATIONS, this one crosses at a boundary that is
+        ordinary prose rather than a typographic coincidence.
+
+        That trade is recorded in the comment on the tuple and accepted there:
+        the buy is a Turkish company form written the way Turkish is actually
+        typed, the cost runs the safe way (a CRITICAL health span reaching too
+        far is over-redaction, not a leak), and the precondition is narrow.
+
+        This test exists so the cost is OBSERVED. It fails if "Sti" is dropped,
+        which is correct: dropping it changes the trade, and that should be a
+        deliberate edit with this docstring read, not a silent one. It is not
+        asserting desired behaviour -- if a future change makes the sweep stop
+        here without losing the Turkish crossing, delete this test and say so.
+        """
+        text = "The medical record notes a prior STI. Kadikoy 2. Noterligi onayli ornegi"
+        findings = self.findings(text)
+        authority = text.index("Kadikoy")
+
+        covering = self.covering(findings, "health_data", authority, authority + len("Kadikoy"))
+        self.assertTrue(
+            covering,
+            "the accepted cost no longer reproduces; re-read the tuple comment "
+            f"before changing it: {self.of_category(findings, 'health_data')}",
+        )
+        # The half that would make this a leak rather than a cost: whatever the
+        # span reaches over, it must still not STORE a direct identifier.
+        for finding in covering:
+            self.assertNotIn("Noterligi", finding["sample"])
+
     def test_every_listed_abbreviation_is_crossed(self):
         """One subTest per entry in _CONTEXT_SWEEP_ABBREVIATIONS.
 
@@ -944,7 +989,7 @@ class ContextSweepNonSentencePeriodTests(unittest.TestCase):
         # subTest rather than being masked by a length check that fires before
         # the loop runs. This one catches the other failure mode: an entry
         # deleted outright is simply not iterated, so no subTest can miss it.
-        self.assertGreaterEqual(len(_CONTEXT_SWEEP_ABBREVIATIONS), 13)
+        self.assertGreaterEqual(len(_CONTEXT_SWEEP_ABBREVIATIONS), 14)
 
     LEAK_PROBES = (
         ("date between digits",

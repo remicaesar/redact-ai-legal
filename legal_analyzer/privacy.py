@@ -373,7 +373,47 @@ GENERIC_COURT_SUFFIX_RULE = DetectionRule(
 #     written with a dot after every letter, so the single-token form this
 #     would target is rare.
 _CONTEXT_SWEEP_ABBREVIATIONS = (
-    "Ltd", "Şti",              # "Yıldız Ltd. Şti." -- both, since each stops the other
+    "Ltd", "Şti", "Sti",       # "Yıldız Ltd. Şti." -- both, since each stops the other.
+                               # "Sti" is spelled out because _i_forms() expands the
+                               # i-family and NOTHING else: it does not relate 'Ş' to 'S',
+                               # and it must not be taught to. The company suffixes below
+                               # fold that pair by hand as _S_FORMS, and they also
+                               # deliberately do NOT fold it for "A.Ş." -- courts anonymise
+                               # parties to their initials, so a diacritic-free "A.S." is
+                               # more often a redacted person than a company. A blanket
+                               # Ş/S fold inside _i_forms() would reach that decision and
+                               # silently reverse it. Turkish is routinely typed without
+                               # diacritics, so "Ltd. Sti." is ordinary, not a typo; before
+                               # this entry the sweep stopped dead at its period and the
+                               # clause after it carried no finding, which is the
+                               # unredactable-by-construction failure the whole exception
+                               # list exists to prevent.
+                               #
+                               # This entry is NOT free, and an earlier version of this
+                               # comment claimed it was. "STI." ends English sentences --
+                               # sexually transmitted infection -- and it does so in
+                               # exactly the documents health_data runs on, whose triggers
+                               # include the English "medical" and "patient". Measured:
+                               # "The medical record notes a prior STI. Kadikoy 2.
+                               # Noterligi onayli ornegi" widens the health_data span from
+                               # 'medical record notes a prior STI' to '... STI. Kadikoy
+                               # 2', pulling an authority name into a CRITICAL sample --
+                               # court_or_authority is not a DIRECT_IDENTIFIER_CATEGORY,
+                               # so the cut does not take it back out.
+                               #
+                               # Kept anyway, and this is the criterion at the head of this
+                               # block applied rather than dodged. "No" and "age" were
+                               # dropped because their buy was thin AND their sentence-final
+                               # use is ordinary prose. Here only the second half holds: the
+                               # buy is a Turkish company form written the way Turkish is
+                               # actually typed, and losing it costs a whole clause its only
+                               # CRITICAL finding. The cost runs the safe way -- a health
+                               # span reaching too far is over-redaction, not a leak -- and
+                               # its precondition is the literal token "STI." at an English
+                               # sentence end, far narrower than the ordinal case rejected
+                               # above, which fired on every Turkish filing. Pinned by
+                               # test_english_sti_sentence_end_is_crossed_as_an_accepted_cost
+                               # so the trade is observed rather than asserted.
     "vb", "vs",                # "ve benzeri" / "vesaire"; "vs." is also English "versus"
     "Av", "Dr", "Prof", "Doç",  # professional titles, always followed by a name
     "Sok", "Cad", "Mah", "Apt",  # street-address structure words
