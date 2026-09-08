@@ -1390,28 +1390,78 @@ def external_llm_gate_policy(
     direct_identifiers_detected = direct_identifiers_remaining
     if direct_identifiers_detected is None:
         direct_identifiers_detected = has_direct_identifiers(findings)
-    failed_conditions = []
-
-    if extraction_status["status"] != "Complete":
-        failed_conditions.append("Extraction status must be Complete.")
-    if ocr_blocks_release(ocr_status):
-        failed_conditions.append("OCR output must be accepted or not required.")
-    if residual_risk["level"] != "Low":
-        failed_conditions.append("Residual risk must be Low.")
-    if critical_count:
-        failed_conditions.append("Critical findings must be zero.")
-    if direct_identifiers_detected:
-        failed_conditions.append("No direct identifiers may remain in detected findings.")
-    if not redaction_completed:
-        failed_conditions.append("Redaction pass must be completed.")
-    # Deliberately unconditional. There was an `or auto_mode_enabled` arm here
-    # that substituted a stored flag for a person's approval; it had no UI, no
-    # indicator and no audit surface, and it could only ever let a document out
-    # that nobody had approved. It was removed rather than made visible. An
-    # automated or batch mode, if it is ever wanted, is a feature to design with
-    # its own visible switch and audit trail -- not an arm on this condition.
-    if not human_review_approved:
-        failed_conditions.append("Human review approval is required.")
+    ocr_state = ocr_status or "not_required"
+    # The one place the seven conditions are stated. `failed_conditions` and
+    # `policy` are both derived from it, and the studio renders the whole list
+    # from `conditions` rather than rebuilding a shorter approximation of it in
+    # the browser -- which is what put five browser-computed green ticks
+    # directly above this gate's red "Blocked". Order is load-bearing:
+    # `failed_conditions` preserves the sequence callers and tests already read.
+    conditions = [
+        {
+            "id": "extraction_complete",
+            "label": "Extraction complete",
+            "policy": "Extraction status = Complete",
+            "message": "Extraction status must be Complete.",
+            "passed": extraction_status["status"] == "Complete",
+            "detail": str(extraction_status.get("status") or "Unknown"),
+        },
+        {
+            "id": "ocr_resolved",
+            "label": "OCR accepted or not required",
+            "policy": "OCR accepted or not required",
+            "message": "OCR output must be accepted or not required.",
+            "passed": not ocr_blocks_release(ocr_status),
+            "detail": ocr_state,
+        },
+        {
+            "id": "residual_risk_low",
+            "label": "Residual risk after review is Low",
+            "policy": "Residual risk = Low",
+            "message": "Residual risk must be Low.",
+            "passed": residual_risk["level"] == "Low",
+            "detail": f"currently {residual_risk.get('level') or 'Unknown'}",
+        },
+        {
+            "id": "no_critical_findings",
+            "label": "No undecided critical findings",
+            "policy": "Critical findings = 0",
+            "message": "Critical findings must be zero.",
+            "passed": not critical_count,
+            "detail": "clear" if not critical_count else f"{critical_count} outstanding",
+        },
+        {
+            "id": "no_direct_identifiers",
+            "label": "No direct identifiers remain",
+            "policy": "No direct identifiers remain",
+            "message": "No direct identifiers may remain in detected findings.",
+            "passed": not direct_identifiers_detected,
+            "detail": "none remain" if not direct_identifiers_detected else "at least one remains",
+        },
+        {
+            "id": "redaction_completed",
+            "label": "Redaction pass completed",
+            "policy": "Redaction pass completed",
+            "message": "Redaction pass must be completed.",
+            "passed": bool(redaction_completed),
+            "detail": "done" if redaction_completed else "not marked complete",
+        },
+        # Deliberately unconditional. There was an `or auto_mode_enabled` arm here
+        # that substituted a stored flag for a person's approval; it had no UI, no
+        # indicator and no audit surface, and it could only ever let a document out
+        # that nobody had approved. It was removed rather than made visible. An
+        # automated or batch mode, if it is ever wanted, is a feature to design with
+        # its own visible switch and audit trail -- not an arm on this condition.
+        {
+            "id": "human_review_approved",
+            "label": "Human review approved",
+            "policy": "Human review approved",
+            "message": "Human review approval is required.",
+            "passed": bool(human_review_approved),
+            "detail": "approved" if human_review_approved else "not approved",
+        },
+    ]
+    failed_conditions = [condition["message"] for condition in conditions if not condition["passed"]]
 
     allowed = not failed_conditions
     if allowed:
@@ -1427,14 +1477,8 @@ def external_llm_gate_policy(
         "failed_conditions": failed_conditions,
         "critical_count": critical_count,
         "direct_identifiers_detected": direct_identifiers_detected,
-        "policy": [
-            "Extraction status = Complete",
-            "Residual risk = Low",
-            "Critical findings = 0",
-            "No direct identifiers remain",
-            "Redaction pass completed",
-            "Human review approved",
-        ],
+        "conditions": conditions,
+        "policy": [condition["policy"] for condition in conditions],
     }
 
 

@@ -18,6 +18,7 @@ from app import (
     audited_error,
     document_plan_segments,
     document_source_text,
+    export_gate_state,
     format_size,
     get_db,
     matter_for_document,
@@ -438,6 +439,10 @@ def api_document_detail(doc_id: int):
         "manual": pdf_region_summary["manual"] or 0,
     }
     result["privacy_profile"] = json.loads(result["privacy_profile"] or "{}")
+    # The reviewed-export gate, decided by the same functions the export
+    # endpoints refuse on. The studio renders it instead of re-deriving an
+    # approximation of it in the browser.
+    result["export_gate"] = export_gate_state(conn, doc)
     result.update(
         compute_pipeline_status(
             result,

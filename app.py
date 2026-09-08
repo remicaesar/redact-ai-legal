@@ -655,15 +655,19 @@ def insert_pending_pdf_regions(conn: sqlite3.Connection, doc_id: int, regions: l
     return inserted
 
 
-def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]:
-    blockers: list[str] = []
+def pdf_export_conditions(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[dict]:
+    """Every condition the reviewed-PDF export enforces, stated once, as data.
+
+    pdf_export_blockers() refuses on these and the studio's "this export" panel
+    renders these; neither restates them. The browser used to recompute an
+    approximation of the export conditions itself, which is how a lawyer got a
+    row of green ticks next to an endpoint that would have refused.
+
+    Order is load-bearing: pdf_export_blockers() preserves the message sequence
+    its callers and tests already read.
+    """
     doc_id = doc["id"]
-    if ocr_blocks_redaction(doc["ocr_status"]):
-        blockers.append("OCR output must be accepted or not required before PDF redaction export.")
-    if not doc["redaction_completed"]:
-        blockers.append("Redaction must be marked complete before reviewed PDF export.")
-    if not doc["human_review_approved"]:
-        blockers.append("Human review approval is required before reviewed PDF export.")
+    ocr_state = doc["ocr_status"] or "not_required"
     pending_regions = conn.execute(
         "SELECT COUNT(*) FROM pdf_redaction_regions WHERE document_id = ? AND review_status = 'pending'",
         (doc_id,),
@@ -683,16 +687,54 @@ def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]
         """,
         (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
     ).fetchone()[0]
-    if pending_regions:
-        blockers.append("All PDF redaction boxes must be approved or rejected.")
-    if undecided_findings:
-        blockers.append(
-            "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
-            "retained unredacted — before reviewed PDF export."
-        )
-    if not approved_regions:
-        blockers.append("At least one approved PDF redaction box is required.")
-    if (doc["ocr_status"] or "not_required") == "accepted":
+    conditions = [
+        {
+            "id": "ocr_resolved",
+            "label": "OCR accepted or not required",
+            "passed": not ocr_blocks_redaction(doc["ocr_status"]),
+            "detail": ocr_state,
+            "message": "OCR output must be accepted or not required before PDF redaction export.",
+        },
+        {
+            "id": "redaction_completed",
+            "label": "Redaction marked complete",
+            "passed": bool(doc["redaction_completed"]),
+            "detail": "done" if doc["redaction_completed"] else "required",
+            "message": "Redaction must be marked complete before reviewed PDF export.",
+        },
+        {
+            "id": "human_review_approved",
+            "label": "Human review approved",
+            "passed": bool(doc["human_review_approved"]),
+            "detail": "approved" if doc["human_review_approved"] else "required",
+            "message": "Human review approval is required before reviewed PDF export.",
+        },
+        {
+            "id": "no_pending_regions",
+            "label": "Every redaction box decided",
+            "passed": not pending_regions,
+            "detail": "clear" if not pending_regions else f"{pending_regions} pending",
+            "message": "All PDF redaction boxes must be approved or rejected.",
+        },
+        {
+            "id": "findings_decided",
+            "label": "Every finding decided",
+            "passed": not undecided_findings,
+            "detail": "clear" if not undecided_findings else f"{undecided_findings} undecided",
+            "message": (
+                "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
+                "retained unredacted — before reviewed PDF export."
+            ),
+        },
+        {
+            "id": "approved_region_exists",
+            "label": "At least one approved redaction box",
+            "passed": bool(approved_regions),
+            "detail": f"{approved_regions} approved",
+            "message": "At least one approved PDF redaction box is required.",
+        },
+    ]
+    if ocr_state == "accepted":
         token_count = conn.execute(
             "SELECT COUNT(*) FROM ocr_tokens WHERE document_id = ?",
             (doc_id,),
@@ -702,11 +744,119 @@ def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]
                 "SELECT COUNT(*) FROM pdf_redaction_regions WHERE document_id = ? AND source = 'manual' AND review_status = 'approved'",
                 (doc_id,),
             ).fetchone()[0]
-            if not approved_manual:
-                blockers.append(
-                    "Accepted OCR text has no coordinate data; add and approve manual PDF redaction boxes before native redacted export."
-                )
-    return blockers
+            conditions.append(
+                {
+                    "id": "ocr_coordinates_available",
+                    "label": "Accepted OCR has coordinates or approved manual boxes",
+                    "passed": bool(approved_manual),
+                    "detail": "no OCR coordinate data" if not approved_manual else "manual boxes approved",
+                    "message": (
+                        "Accepted OCR text has no coordinate data; add and approve manual PDF redaction "
+                        "boxes before native redacted export."
+                    ),
+                }
+            )
+    return conditions
+
+
+def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]:
+    return [c["message"] for c in pdf_export_conditions(conn, doc) if not c["passed"]]
+
+
+def docx_export_conditions(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[dict]:
+    """Every condition the reviewed-DOCX export enforces, stated once, as data.
+
+    get_exportable_docx() refuses on the first unmet entry here and the studio's
+    "this export" panel renders the same list, so the panel and the endpoint
+    cannot drift. `status` and `metadata` belong to the refusal, not the panel.
+    """
+    doc_id = doc["id"]
+    undecided_findings = conn.execute(
+        f"""
+        SELECT COUNT(*) FROM privacy_findings
+        WHERE document_id = ?
+          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
+        """,
+        (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
+    ).fetchone()[0]
+    return [
+        {
+            "id": "docx_source",
+            "label": "Source file is a DOCX",
+            "passed": doc["file_extension"] == ".docx",
+            "detail": doc["file_extension"] or "unknown",
+            "message": "Actual redacted export currently supports DOCX only.",
+            "status": 415,
+            "metadata": None,
+        },
+        {
+            "id": "redaction_completed",
+            "label": "Redaction marked complete",
+            "passed": bool(doc["redaction_completed"]),
+            "detail": "done" if doc["redaction_completed"] else "required",
+            "message": "Redaction must be completed before actual redacted export.",
+            "status": 409,
+            "metadata": None,
+        },
+        # The same condition as the release gate's (external_llm_gate_policy in
+        # privacy.py), and it has to stay the same one: when the two disagree the
+        # UI tells a lawyer the document is releasable while this endpoint refuses
+        # it. Both require a real human approval and nothing else.
+        {
+            "id": "human_review_approved",
+            "label": "Human review approved",
+            "passed": bool(doc["human_review_approved"]),
+            "detail": "approved" if doc["human_review_approved"] else "required",
+            "message": "Human review approval is required before actual redacted export.",
+            "status": 409,
+            "metadata": None,
+        },
+        # redaction_completed is a latch: reverting a finding to 'pending' (via
+        # /api/finding/<id>/review) does not clear it, and only the OCR/reset
+        # transitions do. redaction_targets_for_document() then drops that finding
+        # from the target list, so it was never redacted and the exported DOCX
+        # carried it in cleartext while both gates above still read as satisfied.
+        # Re-check the findings themselves, the way pdf_export_conditions() does.
+        {
+            "id": "findings_decided",
+            "label": "Every finding decided",
+            "passed": not undecided_findings,
+            "detail": "clear" if not undecided_findings else f"{undecided_findings} undecided",
+            "message": (
+                "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
+                "retained unredacted — before actual redacted export."
+            ),
+            "status": 409,
+            "metadata": {"unreviewed_findings": undecided_findings},
+        },
+    ]
+
+
+def export_gate_state(conn: sqlite3.Connection, doc: sqlite3.Row) -> dict:
+    """What the reviewed-export endpoint would do with this document, right now.
+
+    A separate question from the external-LLM release gate: a reviewer who
+    deliberately kept an identifier is still entitled to the file that reflects
+    their decisions. The studio renders the two as two named panels because the
+    same screen used to answer both at once and say which was which nowhere.
+    """
+    extension = (doc["file_extension"] or "").lower()
+    if extension == ".pdf":
+        conditions = pdf_export_conditions(conn, doc)
+        export_format = "pdf"
+    else:
+        conditions = docx_export_conditions(conn, doc)
+        export_format = "docx" if extension == ".docx" else None
+    return {
+        "format": export_format,
+        "supported": extension in {".docx", ".pdf"},
+        "allowed": all(condition["passed"] for condition in conditions),
+        "conditions": [
+            {key: condition[key] for key in ("id", "label", "passed", "detail")}
+            for condition in conditions
+        ],
+        "failed_conditions": [c["message"] for c in conditions if not c["passed"]],
+    }
 
 
 def save_redacted_pdf_artifact_file(doc_id: int, safe_stem: str, data: bytes) -> Path:
@@ -733,46 +883,19 @@ def get_exportable_docx(conn: sqlite3.Connection, doc_id: int, audit_action: str
     if not doc:
         conn.close()
         return jsonify({"error": "Document not found"}), 404
-    if doc["file_extension"] != ".docx":
-        return audited_error(conn, "Actual redacted export currently supports DOCX only.", 415, audit_action, doc_id)
-    if not doc["redaction_completed"]:
-        return audited_error(conn, "Redaction must be completed before actual redacted export.", 409, audit_action, doc_id)
-    # The same condition as the release gate's (external_llm_gate_policy in
-    # privacy.py), and it has to stay the same one: when the two disagree the
-    # UI tells a lawyer the document is releasable while this endpoint refuses
-    # it. Both now require a real human approval and nothing else.
-    if not doc["human_review_approved"]:
-        return audited_error(
-            conn,
-            "Human review approval is required before actual redacted export.",
-            409,
-            audit_action,
-            doc_id,
-        )
-    # redaction_completed is a latch: reverting a finding to 'pending' (via
-    # /api/finding/<id>/review) does not clear it, and only the OCR/reset
-    # transitions do. redaction_targets_for_document() then drops that finding
-    # from the target list, so it was never redacted and the exported DOCX
-    # carried it in cleartext while both gates above still read as satisfied.
-    # Re-check the findings themselves, the way pdf_export_blockers() does.
-    unreviewed_findings = conn.execute(
-        f"""
-        SELECT COUNT(*) FROM privacy_findings
-        WHERE document_id = ?
-          AND COALESCE(review_status, 'pending') NOT IN ({','.join('?' for _ in RESOLVED_REVIEW_STATUSES)})
-        """,
-        (doc_id, *sorted(RESOLVED_REVIEW_STATUSES)),
-    ).fetchone()[0]
-    if unreviewed_findings:
-        return audited_error(
-            conn,
-            "Every privacy finding must be decided — approved, dismissed as not sensitive, or "
-            "retained unredacted — before actual redacted export.",
-            409,
-            audit_action,
-            doc_id,
-            {"unreviewed_findings": unreviewed_findings},
-        )
+    # Refuse on the first unmet condition in docx_export_conditions(), which is
+    # also the list the studio's "this export" panel renders. One source, so the
+    # panel a lawyer reads and the endpoint that refuses cannot disagree.
+    for condition in docx_export_conditions(conn, doc):
+        if not condition["passed"]:
+            return audited_error(
+                conn,
+                condition["message"],
+                condition["status"],
+                audit_action,
+                doc_id,
+                condition["metadata"],
+            )
     return doc
 
 

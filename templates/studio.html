@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -820,6 +820,52 @@
             background: #e8f4ed;
             color: #167647;
         }
+        /* The two panels answer different questions -- "can I download this?"
+           and "can I send this to an outside model?" -- so they are titled
+           separately and the release panel carries its own verdict. They used
+           to be one stack, which put five green ticks and a live download
+           button directly above a red "Blocked" belonging to the other gate. */
+        .gate-question {
+            font-size: 11.5px;
+            color: var(--muted);
+            line-height: 1.5;
+            margin: -2px 0 2px;
+        }
+        .gate-verdict {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            align-self: start;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-size: 11.5px;
+            font-weight: 650;
+        }
+        .gate-verdict.cleared { background: #e8f4ed; color: #167647; }
+        .gate-verdict.not-cleared { background: #fdecec; color: #a3231f; }
+        .gate-summary-line {
+            font-size: 12.5px;
+            line-height: 1.55;
+        }
+        .gate-fix {
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: var(--muted);
+            border-top: 1px dashed var(--line);
+            padding-top: 7px;
+        }
+        .release-gate { border-top: 1px solid var(--line); }
+        .coverage-notice {
+            margin: 8px 0 0;
+            padding: 10px 12px;
+            border: 1px solid var(--color-warning, #d9a441);
+            border-radius: var(--radius);
+            background: var(--color-warning-soft, #fdf6e7);
+            color: var(--color-text, #1b1b18);
+            font-size: 11.5px;
+            line-height: 1.55;
+        }
+        .coverage-notice strong { font-weight: 650; }
         .finding-head {
             position: sticky;
             top: 0;
@@ -1745,6 +1791,7 @@
                         <span id="assistantRiskSummary" class="subtle">Loading risk summary…</span>
                     </div>
                     <div id="assistantNextAction" class="assistant-next-action" role="status">Loading recommended next action…</div>
+                    <div id="languageCoverageNotice" class="coverage-notice" role="note" hidden></div>
                     <div class="assistant-mode-switch" role="group" aria-label="Review mode">
                         <button id="guidedModeButton" class="active" type="button" aria-pressed="true" onclick="setReviewMode('guided')">Guided review</button>
                         <button id="groupModeButton" type="button" aria-pressed="false" onclick="setReviewMode('groups')">By type</button>
@@ -1800,13 +1847,8 @@
                 <details id="exportReadinessDetails" class="assistant-technical">
                     <summary>Export readiness and technical details</summary>
                     <div class="assistant-technical-content">
-                        <div id="exportGatePanel" class="export-gate"></div>
-                        <section class="panel panel-pad">
-                            <details>
-                                <summary class="panel-summary"><h2>Gate conditions</h2> <span id="gateDecision" class="badge">Loading</span></summary>
-                                <div id="gateList" class="gate-list"></div>
-                            </details>
-                        </section>
+                        <div id="exportGatePanel" class="export-gate" aria-label="This export"></div>
+                        <div id="releaseGatePanel" class="export-gate release-gate" aria-label="Sending this to an external AI model"></div>
                         <section class="panel panel-pad">
                             <details>
                                 <summary class="panel-summary"><h2>Artifact timeline</h2></summary>
@@ -1950,22 +1992,79 @@
             if (list) list.innerHTML = '<div class="studio-failure">Matter documents could not be loaded.</div>';
         }
 
+        // Two residual-risk figures, and they are not interchangeable.
+        //
+        // `residual_risk` is the detection-time measurement and stays that on
+        // purpose -- the accuracy audit and the risk badges are calibrated on
+        // it (refresh_release_state() in legal_analyzer/privacy.py says so).
+        // `post_review_residual_risk` is the level the release gate was
+        // actually decided against, after the reviewer's approvals, retentions
+        // and dismissals. It was computed and rendered nowhere, so a fully
+        // cleared document read "High risk" while the figure that cleared it
+        // was invisible. Show both, labelled, and never overwrite the first
+        // with the second.
+        function residualRiskPair(doc) {
+            const detection = doc.residual_risk || 'Unknown';
+            const profile = doc.privacy_profile || {};
+            const postReview = profile.post_review_residual_risk?.level || null;
+            const moved = Boolean(postReview) && postReview !== detection;
+            return {
+                detection,
+                postReview: postReview || detection,
+                current: moved ? postReview : detection,
+                moved,
+                explanation: moved
+                    ? `${detection} at detection → ${postReview} after your decisions`
+                    : (postReview
+                        ? `${detection} at detection and after your decisions`
+                        : `${detection} at detection — no decisions recorded yet`)
+            };
+        }
+
+        // The detection engine is rules-based and Turkish-tuned; README.md
+        // states that English name and address coverage is materially lower.
+        // The document's detected language was stored and never shown, so on an
+        // English document the screen said "all findings reviewed" without ever
+        // saying what the rules do not reach. Say it at the point of review.
+        function renderLanguageCoverageNotice(doc) {
+            const notice = document.getElementById('languageCoverageNotice');
+            if (!notice) return;
+            const language = String(doc.language || 'TR').toUpperCase();
+            if (language === 'TR') {
+                notice.hidden = true;
+                notice.innerHTML = '';
+                return;
+            }
+            const described = language === 'EN' ? 'English' : (language === 'TR/EN' ? 'mixed Turkish/English' : language);
+            notice.innerHTML = `
+                <strong>Detected language: ${escapeHtml(described)}. Detection coverage here is lower than on Turkish.</strong>
+                The rules are deterministic regular expressions, Turkish check-digit algorithms and a Turkish
+                name gazetteer — no model reads the document. English name and address coverage is materially
+                lower than Turkish coverage. Read the document and add anything the rules missed; few findings
+                do not mean low risk.
+            `;
+            notice.hidden = false;
+        }
+
         function renderDocument() {
             const doc = currentDoc;
             const profile = doc.privacy_profile || {};
             const findings = doc.findings || [];
             const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending');
             const critical = findings.filter((finding) => finding.risk === 'CRITICAL');
-            const gate = profile.external_llm_gate || {};
-            const failed = gate.failed_conditions || [];
 
             document.title = `${doc.filename} - Redact AI`;
             document.getElementById('docTitle').textContent = doc.filename;
             document.getElementById('docTitle').title = doc.filename;
-            document.getElementById('riskBadge').className = `badge risk-${escapeHtml(doc.residual_risk || 'Unknown')}`;
-            document.getElementById('riskBadge').textContent = doc.residual_risk || 'Unknown';
-            document.getElementById('topRiskBadge').className = `badge risk-${escapeHtml(doc.residual_risk || 'Unknown')}`;
-            document.getElementById('topRiskBadge').textContent = `${doc.residual_risk || 'Unknown'} risk`;
+            const risk = residualRiskPair(doc);
+            const riskBadge = document.getElementById('riskBadge');
+            riskBadge.className = `badge risk-${escapeHtml(risk.current)}`;
+            riskBadge.textContent = risk.moved ? `${risk.detection} → ${risk.postReview}` : risk.current;
+            riskBadge.title = risk.explanation;
+            const topRiskBadge = document.getElementById('topRiskBadge');
+            topRiskBadge.className = `badge risk-${escapeHtml(risk.current)}`;
+            topRiskBadge.textContent = risk.moved ? `${risk.postReview} risk after review` : `${risk.current} risk`;
+            topRiskBadge.title = risk.explanation;
             const pipelinePill = document.getElementById('pipelinePill');
             pipelinePill.className = `pipeline-pill stage-${doc.pipeline_stage || 'needs_review'}`;
             pipelinePill.textContent = doc.pipeline_message || doc.review_status || 'pending_review';
@@ -1991,6 +2090,7 @@
                 field('Category', `${doc.category_name || '-'} / ${doc.subcategory_name || '-'}`),
                 field('Client', doc.client_name || '-'),
                 field('Matter', doc.matter?.name || 'Unassigned'),
+                field('Residual risk', risk.explanation),
                 field('Extraction', doc.extraction_status || 'Unknown'),
                 field('OCR', doc.ocr_status || 'not_required'),
                 field('Findings', `${findings.length} total, ${pending.length} pending`),
@@ -1998,19 +2098,14 @@
                 field('Reviewed DOCX', Number(doc.redaction_completed || 0) ? 'Redaction completed' : 'Not completed')
             ].join('');
 
-            const allowed = Boolean(gate.allowed);
-            document.getElementById('gateDecision').className = `badge ${allowed ? 'ready' : 'blocked'}`;
-            document.getElementById('gateDecision').textContent = gate.decision || doc.external_llm_readiness || 'Unknown';
-            document.getElementById('gateList').innerHTML = failed.length
-                ? failed.map((item) => `<div class="gate-item">${escapeHtml(item)}</div>`).join('')
-                : '<div class="gate-item">No failed gate conditions.</div>';
-
             renderExports(doc);
             renderArtifacts(doc.artifacts || []);
             renderOcrReview(doc);
             renderStepper(doc);
             updateContextPanels(doc);
             renderExportGate(doc);
+            renderReleaseGate(doc);
+            renderLanguageCoverageNotice(doc);
             renderAssistant(doc);
             renderFindingTruncationBanners(doc, findings);
             renderBulkReviewTable(findings);
@@ -2117,7 +2212,9 @@
             const findings = doc.findings || [];
             const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending');
             const criticalPending = pending.filter((finding) => finding.risk === 'CRITICAL').length;
-            document.getElementById('assistantRiskSummary').textContent = `${findings.length} findings · ${criticalPending} critical pending · ${doc.residual_risk || 'Unknown'} residual risk`;
+            const risk = residualRiskPair(doc);
+            document.getElementById('assistantRiskSummary').textContent = `${findings.length} findings · ${criticalPending} critical pending · ${risk.explanation}`;
+            document.getElementById('assistantRiskSummary').title = risk.explanation;
             document.getElementById('assistantNextAction').textContent = doc.pipeline_message || 'Review the current finding and confirm the next permitted action.';
             const target = document.getElementById('assistantCurrentFinding');
             if ((doc.ocr_status || 'not_required') === 'completed') {
@@ -2688,45 +2785,58 @@
             }
         }
 
+        // Two panels, two questions, each named for the question it answers.
+        //
+        // Neither panel decides anything. Both render a condition list the
+        // server computed -- doc.export_gate.conditions from the same
+        // functions the export endpoints refuse on, and
+        // privacy_profile.external_llm_gate.conditions from
+        // external_llm_gate_policy(). The browser used to rebuild a 5-of-7
+        // approximation of the release gate here, which is how five green
+        // ticks and a live download button ended up directly above the release
+        // gate's red "Blocked".
+        function gateRows(conditions) {
+            return (conditions || []).map((condition) => `
+                <div class="gate-row">
+                    <span class="gate-dot ${condition.passed ? 'ok' : ''}">${condition.passed ? '&#10003;' : ''}</span>
+                    <span class="gate-label">${escapeHtml(condition.label || '')}</span>
+                    <span class="gate-detail">${escapeHtml(String(condition.detail || ''))}</span>
+                </div>
+            `).join('');
+        }
+
+        function decisionCounts(findings) {
+            const counts = { total: findings.length, approved: 0, retained: 0, dismissed: 0, pending: 0 };
+            findings.forEach((finding) => {
+                const status = finding.review_status || 'pending';
+                if (status === 'approved' || status === 'added_by_reviewer') counts.approved += 1;
+                else if (status === 'retained') counts.retained += 1;
+                else if (status === 'dismissed') counts.dismissed += 1;
+                else counts.pending += 1;
+            });
+            return counts;
+        }
+
         function renderExportGate(doc) {
             const target = document.getElementById('exportGatePanel');
             const findings = doc.findings || [];
-            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
-            const critPending = findings.filter((finding) => finding.risk === 'CRITICAL' && (finding.review_status || 'pending') === 'pending').length;
+            const counts = decisionCounts(findings);
+            const gate = doc.export_gate || {};
+            const conditions = gate.conditions || [];
             const isPdf = doc.file_extension === '.pdf';
-            const boxes = doc.pdf_region_summary || {};
-            const extractionOk = (doc.extraction_status || '') === 'Complete';
-            const ocrOk = ['not_required', 'accepted'].includes(doc.ocr_status || 'not_required');
-            const rows = [
-                {
-                    label: 'Extraction & OCR complete',
-                    ok: extractionOk && ocrOk,
-                    detail: extractionOk && ocrOk ? (doc.ocr_status === 'accepted' ? 'OCR accepted' : 'text layer') : (doc.ocr_status || doc.extraction_status || '')
-                },
-                { label: 'All findings reviewed', ok: findings.length > 0 && pending === 0, detail: `${findings.length - pending} / ${findings.length}` },
-                { label: 'No critical findings pending', ok: critPending === 0, detail: critPending === 0 ? 'clear' : `${critPending} pending` }
-            ];
-            if (isPdf) {
-                rows.push({
-                    label: 'PDF boxes reviewed',
-                    ok: Number(boxes.total || 0) > 0 && Number(boxes.pending || 0) === 0,
-                    detail: `${Number(boxes.approved || 0)} approved · ${Number(boxes.pending || 0)} pending`
-                });
-            }
-            rows.push({ label: 'Redaction marked complete', ok: Boolean(Number(doc.redaction_completed || 0)), detail: Number(doc.redaction_completed || 0) ? 'done' : 'required' });
-            rows.push({ label: 'Human review approved', ok: Boolean(Number(doc.human_review_approved || 0)), detail: Number(doc.human_review_approved || 0) ? 'approved' : 'required' });
+            const allOk = Boolean(gate.allowed);
 
-            let html = '<div class="export-gate-title">Export gate</div>';
-            html += rows.map((row) => `
-                <div class="gate-row">
-                    <span class="gate-dot ${row.ok ? 'ok' : ''}">${row.ok ? '&#10003;' : ''}</span>
-                    <span class="gate-label">${escapeHtml(row.label)}</span>
-                    <span class="gate-detail">${escapeHtml(String(row.detail || ''))}</span>
-                </div>
-            `).join('');
+            let html = '<div class="export-gate-title">This export</div>';
+            html += '<div class="gate-question">The reviewed redacted file you download. It reflects your decisions — findings you kept unredacted stay in it on purpose.</div>';
+            html += `<div class="gate-summary-line">${counts.total - counts.pending} of ${counts.total} flagged item${counts.total === 1 ? '' : 's'} decided · ${counts.approved} will be redacted</div>`;
+            const notes = [];
+            if (counts.retained) notes.push(`${counts.retained} kept unredacted on purpose`);
+            if (counts.dismissed) notes.push(`${counts.dismissed} dismissed as not sensitive`);
+            if (counts.pending) notes.push(`${counts.pending} still undecided`);
+            if (notes.length) html += `<div class="gate-detail">${escapeHtml(notes.join(' · '))}</div>`;
+            html += gateRows(conditions);
             {% if can_review %}
-            const exportable = isPdf || doc.file_extension === '.docx';
-            const allOk = rows.every((row) => row.ok);
+            const exportable = Boolean(gate.supported);
             const exported = (doc.artifacts || []).some((artifact) => artifact.artifact_type === (isPdf ? 'redacted_pdf' : 'redacted_docx'));
             if (!Number(doc.redaction_completed || 0)) {
                 html += '<button type="button" class="gate-action gate-approve" onclick="reviewAction(\'mark_redacted\')">Mark redaction complete</button>';
@@ -2743,6 +2853,29 @@
                 html += `<a class="gate-action gate-export ${exported ? 'exported' : (allOk ? '' : 'disabled')}" href="${href}">${label}</a>`;
             }
             {% endif %}
+            target.innerHTML = html;
+        }
+
+        function renderReleaseGate(doc) {
+            const target = document.getElementById('releaseGatePanel');
+            if (!target) return;
+            const gate = (doc.privacy_profile || {}).external_llm_gate || {};
+            const conditions = gate.conditions || [];
+            const failed = conditions.filter((condition) => !condition.passed);
+            const allowed = Boolean(gate.allowed);
+
+            let html = '<div class="export-gate-title">Sending this to an external AI model</div>';
+            html += '<div class="gate-question">A separate question from the download above. This is whether the document may leave the machine for a hosted model.</div>';
+            html += allowed
+                ? '<span class="gate-verdict cleared">Cleared for external AI use</span>'
+                : `<span class="gate-verdict not-cleared">Not cleared — ${failed.length} of ${conditions.length} condition${failed.length === 1 ? '' : 's'} unmet</span>`;
+            html += gateRows(conditions);
+            if (!conditions.length) {
+                html += `<div class="gate-summary-line">${escapeHtml(gate.decision || doc.external_llm_readiness || 'Release state unavailable — reload the document.')}</div>`;
+            }
+            if (failed.length) {
+                html += `<div class="gate-fix">Still to resolve: ${escapeHtml(failed.map((condition) => condition.label).join('; '))}.</div>`;
+            }
             target.innerHTML = html;
         }
 
@@ -2834,8 +2967,17 @@
                 hintEl.textContent = `Status: step ${activeIndex + 1} of ${steps.length} (${step.label}). Viewer role is read-only.`;
                 return;
             }
+            // Not "Review complete" -- a lawyer reads that as "the document has
+            // been checked", and the engine only finds what its rules cover
+            // (see renderLanguageCoverageNotice). Report the reviewer's own
+            // action instead: how many flagged items they decided.
+            const totalFindings = Number(doc.finding_count ?? (doc.findings || []).length);
+            const undecided = Number(doc.pending_finding_count ?? (doc.findings || []).filter((finding) => (finding.review_status || 'pending') === 'pending').length);
+            const decidedLabel = totalFindings
+                ? `${totalFindings - undecided} of ${totalFindings} flagged item${totalFindings === 1 ? '' : 's'} decided`
+                : 'Nothing was flagged for review';
             hintEl.innerHTML = `
-                ${allDone ? '<span class="stepper-complete">Review complete</span>' : ''}
+                ${allDone ? `<span class="stepper-complete">${escapeHtml(decidedLabel)}</span>` : ''}
                 <span class="stepper-hint-text">Next: ${escapeHtml(step.hint)}</span>
                 ${step.cta ? `<button class="stepper-cta" type="button" onclick="stepAction('${step.cta.action}')">${escapeHtml(step.cta.label)}</button>` : ''}
             `;
@@ -2894,10 +3036,15 @@
                 ? `/api/document/${doc.id}/redacted-export?format=pdf&style=black_box`
                 : `/api/document/${doc.id}/redacted-export?format=docx&style=placeholder`;
             const primaryReady = (isPdf || isDocx) && stage === 'ready';
+            // This link waits for the external-AI release gate (pipeline_stage),
+            // not for the export gate -- so it says which question is holding
+            // it. The reviewed export itself is governed by the "This export"
+            // panel above, and the specific unmet condition stays one hover
+            // away in the title attribute.
             const primaryLabel = primaryReady
                 ? `Download safe version (${isPdf ? 'PDF' : 'DOCX'})`
                 : (isPdf || isDocx)
-                    ? `Download safe version — ${escapeHtml(doc.pipeline_message || 'not ready yet')}`
+                    ? 'Download safe version — held until cleared for external AI use'
                     : 'Native redacted export is not supported for this file type';
             const canReviewedDocx = isDocx && Number(doc.redaction_completed || 0);
             document.getElementById('exportLinks').innerHTML = `
@@ -2910,7 +3057,7 @@
                         <button type="button" ${isPdf ? '' : 'disabled'} onclick="runPdfQa()">Run PDF QA</button>
                         <button type="button" onclick="reloadDocument()">Refresh gate</button>
                     </div>
-                    <span class="subtle">Reviewed DOCX preserves the source package. PDF black boxes are review overlays until the backend true-redaction export is downloaded. PDF boxes: ${Number(pdfSummary.approved || 0)} approved, ${Number(pdfSummary.pending || 0)} pending.</span>
+                    <span class="subtle">The download above additionally waits for external-AI clearance; the reviewed export itself is governed by the "This export" panel. Reviewed DOCX preserves the source package. PDF black boxes are review overlays until the backend true-redaction export is downloaded. PDF boxes: ${Number(pdfSummary.approved || 0)} approved, ${Number(pdfSummary.pending || 0)} pending.</span>
                 </details>
             `;
             {% else %}
