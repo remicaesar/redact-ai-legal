@@ -1863,9 +1863,9 @@
         let pdfRenderedSignature = null;
         let pdfDrag = null;
         let pdfInitialFitDone = false;
-        let docText = '';
         let docTextWarning = null;
-        let docTextLoadedFor = null;
+        let docPlan = null;
+        let docPlanLoadedFor = null;
         let selectedFindingId = null;
         let docViewMode = 'document';
         let docRedactionStyle = 'placeholder';
@@ -1974,7 +1974,7 @@
             document.getElementById('mobileTabPending').textContent = pending.length ? String(pending.length) : '';
             document.getElementById('findingSummary').textContent = `${findings.length} findings · ${critical.length} critical`;
             document.getElementById('previewMeta').textContent = doc.recommended_strategy || '';
-            document.getElementById('previewText').textContent = profile.redacted_preview || 'No preview available.';
+            renderPreviewPane();
             const isPdf = doc.file_extension === '.pdf';
             document.getElementById('pdfReview').style.display = isPdf ? 'grid' : 'none';
             document.getElementById('docViewControls').hidden = isPdf;
@@ -2577,80 +2577,93 @@
             renderDocView();
         }
 
-        function docSpanStatus(finding) {
-            const status = finding.review_status || 'pending';
+        function docSpanStatusName(reviewStatus) {
+            const status = reviewStatus || 'pending';
             if (status === 'approved' || status === 'added_by_reviewer') return 'approved';
             if (status === 'dismissed') return 'dismissed';
             if (status === 'retained') return 'retained';
             return 'pending';
         }
 
-        function buildDocHtml(text, findings) {
-            const candidates = [];
-            findings.forEach((finding) => {
-                const sample = finding.sample || '';
-                let start = Number.isInteger(finding.start_offset) ? finding.start_offset : -1;
-                let end = Number.isInteger(finding.end_offset) ? finding.end_offset : -1;
-                const offsetsValid = start >= 0 && end > start && end <= text.length && (!sample || text.slice(start, end) === sample);
-                if (!offsetsValid) {
-                    if (!sample) return;
-                    const idx = text.indexOf(sample);
-                    if (idx === -1) return;
-                    start = idx;
-                    end = idx + sample.length;
-                }
-                candidates.push({ start, end, finding });
-            });
-            // Narrow spans win overlaps so a specific TCKN/name is clickable inside a broad
-            // party-role or address context span.
-            candidates.sort((a, b) => (a.end - a.start) - (b.end - b.start));
-            const spans = [];
-            const overlaps = (a, b) => a.start < b.end && b.start < a.end;
-            candidates.forEach((candidate) => {
-                if (!spans.some((accepted) => overlaps(accepted, candidate))) spans.push(candidate);
-            });
-            spans.sort((a, b) => a.start - b.start);
+        function buildDocHtml(segments) {
+            // The redacted rendering is NOT derived here any more. This function
+            // draws what /api/document/<id>/redaction-plan resolved, through the
+            // same resolver the reviewed DOCX export runs, so the document the
+            // lawyer approves is the document they receive. The browser copy
+            // used to replace each finding's offsets and let the NARROWEST span
+            // win an overlap; the export replaces every string match of each
+            // approved sample and lets the WIDEST win. On one Turkish petition
+            // that showed a company as "[PERSON_5] ve Ticaret A.Ş." and a
+            // defendant's name in cleartext that the export removed.
             let html = '';
-            let cursor = 0;
-            spans.forEach(({ start, end, finding }) => {
-                html += escapeHtml(text.slice(cursor, start));
-                const status = docSpanStatus(finding);
-                let cls = `doc-span ${status}${finding.id === selectedFindingId ? ' selected' : ''}`;
-                let content = escapeHtml(text.slice(start, end));
-                if (status === 'approved') {
-                    if (docRedactionStyle === 'placeholder') {
-                        cls += ' chip';
-                        content = escapeHtml(finding.replacement_text || finding.placeholder || '[REDACTED]');
-                    } else {
-                        cls += ' blackbox';
-                    }
+            segments.forEach((segment) => {
+                if (segment.kind === 'text') {
+                    html += escapeHtml(segment.text);
+                    return;
                 }
-                html += `<span class="${cls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, true)" title="${escapeHtml(finding.category || '')} · ${escapeHtml(finding.review_status || 'pending')}">${content}</span>`;
-                cursor = end;
+                const status = segment.kind === 'redacted' ? 'approved' : docSpanStatusName(segment.review_status);
+                const ids = segment.finding_ids || [];
+                const selected = selectedFindingId !== null && ids.includes(selectedFindingId);
+                let cls = `doc-span ${status}${selected ? ' selected' : ''}`;
+                let content = escapeHtml(segment.text);
+                if (segment.kind === 'redacted') {
+                    cls += docRedactionStyle === 'placeholder' ? ' chip' : ' blackbox';
+                    if (docRedactionStyle !== 'placeholder') content = escapeHtml(segment.source_text);
+                }
+                const findingId = segment.finding_id === null || segment.finding_id === undefined ? '' : segment.finding_id;
+                const click = findingId === '' ? '' : ` onclick="selectFinding(${findingId}, true)"`;
+                const title = `${escapeHtml(segment.category || '')} · ${escapeHtml(segment.review_status || 'pending')}`;
+                html += `<span class="${cls}" data-finding-id="${findingId}"${click} title="${title}">${content}</span>`;
             });
-            html += escapeHtml(text.slice(cursor));
             return html;
+        }
+
+        function docPlanSignature() {
+            const findings = (currentDoc && currentDoc.findings) || [];
+            return [
+                docId,
+                docRedactionStyle,
+                findings.map((f) => `${f.id}:${f.review_status || 'pending'}:${f.replacement_text || ''}`).join('|')
+            ].join('#');
+        }
+
+        async function loadDocPlan() {
+            const signature = docPlanSignature();
+            if (docPlanLoadedFor === signature) return docPlan;
+            const style = docRedactionStyle === 'placeholder' ? 'placeholder' : 'mask';
+            const response = await fetch(`/api/document/${docId}/redaction-plan?style=${style}`);
+            if (!response.ok) {
+                docPlan = null;
+                docPlanLoadedFor = null;
+                return null;
+            }
+            docPlan = await response.json();
+            docTextWarning = docPlan.warning;
+            docPlanLoadedFor = signature;
+            return docPlan;
+        }
+
+        async function renderPreviewPane() {
+            // The same resolved segments the canvas draws and the export writes.
+            const plan = await loadDocPlan();
+            document.getElementById('previewText').textContent = plan && plan.has_text
+                ? plan.segments.map((segment) => segment.text).join('')
+                : 'No preview available.';
         }
 
         async function renderDocView() {
             if (!currentDoc || currentDoc.file_extension === '.pdf') return;
             const paper = document.getElementById('docPaper');
-            if (docTextLoadedFor !== docId) {
-                const response = await fetch(`/api/document/${docId}/text`);
-                if (!response.ok) {
-                    paper.textContent = 'Document text could not be loaded. Use the redacted preview instead.';
-                    return;
-                }
-                const data = await response.json();
-                docText = data.text || '';
-                docTextWarning = data.warning;
-                docTextLoadedFor = docId;
+            const plan = await loadDocPlan();
+            if (!plan) {
+                paper.textContent = 'Document text could not be loaded. Use the redacted preview instead.';
+                return;
             }
-            if (!docText.trim()) {
+            if (!plan.has_text) {
                 paper.textContent = docTextWarning || 'No extractable text yet. Run OCR, or use the redacted preview.';
                 return;
             }
-            paper.innerHTML = buildDocHtml(docText, (currentDoc && currentDoc.findings) || []);
+            paper.innerHTML = buildDocHtml(plan.segments || []);
         }
 
         function selectFinding(findingId, scrollToCard) {
@@ -2895,8 +2908,6 @@
                         <a class="button-link ${canReviewedDocx ? '' : 'disabled'}" href="/api/document/${doc.id}/redacted-export?format=docx&style=mask">Reviewed DOCX, mask style</a>
                         <button type="button" ${canReviewedDocx ? '' : 'disabled'} onclick="runExportQa('placeholder')">Run DOCX QA</button>
                         <button type="button" ${isPdf ? '' : 'disabled'} onclick="runPdfQa()">Run PDF QA</button>
-                        <a class="button-link" href="/api/document/${doc.id}/export?format=docx">Preview DOCX (rebuilt, lower assurance)</a>
-                        <a class="button-link" href="/api/document/${doc.id}/export?format=txt">Preview TXT (lower assurance)</a>
                         <button type="button" onclick="reloadDocument()">Refresh gate</button>
                     </div>
                     <span class="subtle">Reviewed DOCX preserves the source package. PDF black boxes are review overlays until the backend true-redaction export is downloaded. PDF boxes: ${Number(pdfSummary.approved || 0)} approved, ${Number(pdfSummary.pending || 0)} pending.</span>
@@ -3224,7 +3235,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
-            docTextLoadedFor = null;
+            docPlanLoadedFor = null;
             await handleMutation(response, 'Extraction re-run complete.');
         }
 
@@ -3237,7 +3248,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
-            docTextLoadedFor = null;
+            docPlanLoadedFor = null;
             await handleMutation(response, 'OCR status updated.');
         }
 

@@ -1,0 +1,20 @@
+services:
+  workstation:
+    build: .
+    ports:
+      - "127.0.0.1:${REDACT_PORT:-5055}:5000"
+    volumes:
+      - database:/state
+      - documents:/app/data
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/login', timeout=3).close()"]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+      start_period: 15s
+volumes:
+  database:
+  documents:

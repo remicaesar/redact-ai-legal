@@ -44,7 +44,14 @@ DOCUMENT_TEXT = (
 )
 
 
-class GateReachabilityTests(unittest.TestCase):
+class ReviewedDocumentHarness:
+    """A one-document review workspace: temp DB, seeded taxonomy, logged-in reviewer.
+
+    A plain mixin rather than a TestCase so importing it elsewhere does not make
+    unittest collect this file's tests a second time. tests/test_auto_mode_removed.py
+    builds on it.
+    """
+
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
@@ -174,6 +181,8 @@ class GateReachabilityTests(unittest.TestCase):
         self.document_action("mark_redacted")
         return self.document_action(action)
 
+
+class GateReachabilityTests(ReviewedDocumentHarness, unittest.TestCase):
     # -- tests -----------------------------------------------------------
 
     def test_fixture_carries_a_critical_finding(self):
@@ -336,25 +345,33 @@ class GateReachabilityTests(unittest.TestCase):
         stored = [f["review_status"] for f in self.findings() if f["id"] == finding_id]
         self.assertEqual(stored, ["dismissed"])
 
-    def test_auto_mode_document_reaching_the_gate_can_also_export(self):
-        """The gate and the redacted-export endpoint must agree on approval.
+    def test_gate_and_redacted_export_agree_on_approval(self):
+        """The gate and the reviewed-DOCX endpoint must answer the same question.
 
-        external_llm_gate_policy() accepts explicit auto-mode in place of a
-        human approval; get_exportable_docx() checked human_review_approved
-        alone, so an auto-mode document read as "Allowed for external LLM use"
-        while its redacted export answered 409.
+        These two read the approval independently, and when they disagree the
+        studio tells a lawyer the document is releasable while the download
+        refuses it. They used to disagree because the gate accepted an
+        `auto_mode_enabled` flag in place of an approval and the export did not;
+        the arm is gone, so the only thing that moves either of them is a human
+        approving the document.
         """
         self.approve_all_findings()
         self.document_action("mark_redacted")
 
+        # Every condition but the approval is now met.
+        blocked_gate = self.gate()
+        self.assertEqual(
+            blocked_gate["failed_conditions"],
+            ["Human review approval is required."],
+            "fixture must reach the approval condition and no other",
+        )
         blocked = self.client.get("/api/document/1/redacted-export?format=docx")
         self.assertEqual(blocked.status_code, 409)
-        self.assertIn("Human review approval", blocked.json["error"])
+        self.assertIn("Human review approval is required", blocked.json["error"])
 
-        detail = self.document_action("enable_auto_mode")
+        detail = self.document_action("approve")
         self.assertTrue(detail["privacy_profile"]["external_llm_gate"]["allowed"])
-        self.assertFalse(detail["human_review_approved"])
-        self.assertTrue(detail["auto_mode_enabled"])
+        self.assertTrue(detail["human_review_approved"])
 
         exported = self.client.get("/api/document/1/redacted-export?format=docx")
         self.assertEqual(
@@ -367,17 +384,17 @@ class GateReachabilityTests(unittest.TestCase):
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
-    def test_auto_mode_does_not_bypass_the_unresolved_findings_export_guard(self):
-        """Auto-mode replaces the approval only, never the leak guard.
+    def test_approval_does_not_bypass_the_unresolved_findings_export_guard(self):
+        """An approval clears the approval condition only, never the leak guard.
 
         redaction_completed is a latch, so a finding reverted to pending after
         redaction was marked complete is dropped from the redaction targets and
-        would be exported in cleartext. That 409 must stay in place for
-        auto-mode documents too.
+        would be exported in cleartext. That 409 has to survive a genuine
+        approval, which is the strongest state a document can be in.
         """
         self.approve_all_findings()
         self.document_action("mark_redacted")
-        self.document_action("enable_auto_mode")
+        self.document_action("approve")
         self.review_finding(self.finding_id("natural_person_name"), "pending")
 
         response = self.client.get("/api/document/1/redacted-export?format=docx")

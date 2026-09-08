@@ -808,13 +808,10 @@ class ContextSweepNonSentencePeriodTests(unittest.TestCase):
         ("Av. title", "criminal_allegation",
          "cezai konuda Av. Mehmet Demir dolandırıcılık iddiası öne sürüldü",
          "dolandırıcılık iddiası öne sürüldü"),
-        # "hasta olan kişi", not "hasta", because the address rule runs under
-        # IGNORECASE and its {0,2} leading-capital prefix therefore swallows
-        # two lowercase words before "Sok" too. With the trigger adjacent it
-        # eats "hasta" itself, and the leading segment this asserts on is cut
-        # away by an unrelated over-match rather than by anything here.
+        # Keep the trigger adjacent: the address-boundary regression used to
+        # need padding here to hide the address prefix swallowing "hasta".
         ("Sok. address word", "health_data",
-         "hasta olan kişi Gül Sok. 5 numarada kanser tanısı aldı",
+         "hasta Gül Sok. 5 numarada kanser tanısı aldı",
          "kanser tanısı aldı"),
         # The remaining entries of _CONTEXT_SWEEP_ABBREVIATIONS, one literal
         # sentence each. They are spelled out rather than generated from the
@@ -833,13 +830,13 @@ class ContextSweepNonSentencePeriodTests(unittest.TestCase):
          "hasta olan kişi Doç. Ayşe Yurt gözetiminde kanser tanısı aldı",
          "kanser tanısı aldı"),
         ("Cad. address word", "health_data",
-         "hasta olan kişi Bağdat Cad. 41 numarada kanser tanısı aldı",
+         "hasta Bağdat Cad. 41 numarada kanser tanısı aldı",
          "kanser tanısı aldı"),
         ("Mah. address word", "health_data",
-         "hasta olan kişi Fener Mah. 3 numarada kanser tanısı aldı",
+         "hasta Fener Mah. 3 numarada kanser tanısı aldı",
          "kanser tanısı aldı"),
         ("Apt. address word", "health_data",
-         "hasta olan kişi Yıldız Apt. 4 numarada kanser tanısı aldı",
+         "hasta Yıldız Apt. 4 numarada kanser tanısı aldı",
          "kanser tanısı aldı"),
         ("bkz.", "health_data",
          "hasta olan kişi bkz. ekli raporda kanser tanısı aldı",

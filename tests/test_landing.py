@@ -49,7 +49,6 @@ class LandingStatsTests(unittest.TestCase):
             extraction_status={"status": "Partial", "blocks_external_llm": True},
             redaction_completed=False,
             human_review_approved=False,
-            auto_mode_enabled=False,
             ocr_status="pending",
         )
         condition_count = len(gate["failed_conditions"])

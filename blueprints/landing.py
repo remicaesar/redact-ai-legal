@@ -89,7 +89,7 @@ GATES = [
     {"title": "Extraction complete", "text": "partial or failed extraction keeps residual risk at Unknown."},
     {"title": "Residual risk is Low", "text": "and zero critical findings remain unreviewed."},
     {"title": "No direct identifiers remain", "text": "and redaction is marked complete."},
-    {"title": "Human review approved", "text": "unless an explicit auto-mode is enabled."},
+    {"title": "Human review approved", "text": "by a person, on this document, with no exception."},
 ]
 
 # Framed as "Designed around", NOT "Aligned to" / "Compliant with". Nothing here

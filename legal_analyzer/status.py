@@ -50,7 +50,6 @@ def compute_pipeline_status(
     ocr_status = data.get("ocr_status") or "not_required"
     redaction_completed = bool(data.get("redaction_completed"))
     review_approved = bool(data.get("human_review_approved"))
-    auto_mode = bool(data.get("auto_mode_enabled"))
     gate = _gate_from_profile(data.get("privacy_profile"))
 
     if ocr_status == "completed":
@@ -86,7 +85,7 @@ def compute_pipeline_status(
             "pipeline_stage": STAGE_READY_TO_FINALIZE,
             "pipeline_message": "All items are reviewed — mark redaction complete.",
         }
-    if not (review_approved or auto_mode):
+    if not review_approved:
         return {
             "pipeline_stage": STAGE_AWAITING_APPROVAL,
             "pipeline_message": "Redaction is complete — approve the review to finish.",

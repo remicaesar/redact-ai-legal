@@ -57,7 +57,13 @@ UNSAFE_REPLACEMENT_TEXT_ERROR = "Replacement text must not contain quotes or ang
 def api_document_review(doc_id: int):
     payload = request.get_json(silent=True) or {}
     action = payload.get("action")
-    if action not in {"mark_redacted", "approve", "reject", "needs_ocr", "reset", "enable_auto_mode", "disable_auto_mode"}:
+    # 'enable_auto_mode'/'disable_auto_mode' used to be here. The enable arm set
+    # a stored flag the release gate and the reviewed-DOCX export accepted in
+    # place of a human approval, with no UI, no indicator and no audit surface.
+    # They are rejected as unsupported rather than silently ignored: a caller
+    # that still sends one must be told nothing happened, not handed a 200 and a
+    # document that looks reviewed.
+    if action not in {"mark_redacted", "approve", "reject", "needs_ocr", "reset"}:
         return jsonify({"error": "Unsupported review action"}), 400
 
     conn = get_db()
@@ -68,7 +74,6 @@ def api_document_review(doc_id: int):
 
     redaction_completed = bool(doc["redaction_completed"])
     human_review_approved = bool(doc["human_review_approved"])
-    auto_mode_enabled = bool(doc["auto_mode_enabled"])
     review_status = doc["review_status"] or "pending_review"
     ocr_status = doc["ocr_status"] or "not_required"
 
@@ -137,29 +142,19 @@ def api_document_review(doc_id: int):
     elif action == "reset":
         redaction_completed = False
         human_review_approved = False
-        auto_mode_enabled = False
         review_status = "needs_ocr" if doc["extraction_status"] in {"Partial", "Failed"} else "pending_review"
         ocr_status = "queued" if doc["extraction_status"] in {"Partial", "Failed"} else "not_required"
-    elif action == "enable_auto_mode":
-        auto_mode_enabled = True
-        review_status = "auto_mode_enabled"
-    elif action == "disable_auto_mode":
-        auto_mode_enabled = False
-        review_status = "pending_review"
 
     profile = refresh_release_state(
         json.loads(doc["privacy_profile"] or "{}"),
         redaction_completed=redaction_completed,
         human_review_approved=human_review_approved,
-        auto_mode_enabled=auto_mode_enabled,
         ocr_status=ocr_status,
         **review_gate_counts(conn, doc_id),
     )
     gate_allowed = bool(profile["external_llm_gate"]["allowed"])
     if action == "approve":
         review_status = "approved_for_external_llm" if gate_allowed else "reviewed_blocked"
-    elif action == "enable_auto_mode" and gate_allowed:
-        review_status = "approved_for_external_llm"
 
     conn.execute(
         """
@@ -170,7 +165,6 @@ def api_document_review(doc_id: int):
             redaction_status = ?,
             redaction_completed = ?,
             human_review_approved = ?,
-            auto_mode_enabled = ?,
             review_status = ?,
             ocr_status = ?,
             reviewed_at = CURRENT_TIMESTAMP,
@@ -184,7 +178,6 @@ def api_document_review(doc_id: int):
             profile["redaction_status"],
             1 if redaction_completed else 0,
             1 if human_review_approved else 0,
-            1 if auto_mode_enabled else 0,
             review_status,
             ocr_status,
             doc_id,

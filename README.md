@@ -1,8 +1,89 @@
-# Legal Document Analyzer
+# Redact AI
 
-A cautious legal-tech prototype for classifying legal documents and preparing privacy-reviewed, risk-reduced outputs for LLM workflows.
+**A local legal privacy document workstation.** Organize documents into matters,
+inspect privacy findings beside the document, review what should be removed, and
+prepare reviewed DOCX or PDF redactions with export checks.
 
-The product deliberately avoids describing outputs as fully anonymous unless re-identification risk has been assessed and is genuinely low. It distinguishes redaction, pseudonymization, de-identification, and anonymization, and treats legal documents as high-context records where dates, authorities, locations, case facts, and party roles may still re-identify people or matters.
+Built for technically comfortable lawyers, legal-tech builders, developers and
+founders evaluating a local review workflow, especially for Turkish legal documents.
+You run it on your own computer. There is no hosted demo or document upload service.
+
+![Redact AI running locally with a fictional Turkish petition open in Redaction Studio](docs/images/redaction-studio.png)
+
+*The real review workspace, using a bundled synthetic document. Findings await a
+reviewer's decision; detecting them has not yet redacted the document.*
+
+## Try it locally
+
+Install and start [Docker Desktop](https://docs.docker.com/get-started/get-docker/)
+(or a local Docker Engine with Compose). After cloning
+[`remicaesar/redact-ai-legal`](https://github.com/remicaesar/redact-ai-legal) and
+entering its directory, run one command in a shell (Git Bash or WSL on Windows):
+
+```bash
+./start.sh
+```
+
+It builds the app with **Tesseract, Turkish/English OCR data and Poppler**, initializes
+and migrates SQLite, indexes three fictional practice documents, and starts the
+workstation. It generates a unique session key and admin password for this install,
+then **prints the login URL, username and password** when the app is ready.
+Open **http://127.0.0.1:5055/login** and try **Synthetic practice**.
+
+The first build downloads dependencies, so allow a few minutes depending on your
+connection; repeat starts reuse the image cache. No Python setup or manually generated
+key is needed. [Meet the three samples](samples/README.md), including a scanned PDF
+with no text layer for the local OCR workflow.
+
+Run `./start.sh` again to resume: it keeps your documents, review decisions and login.
+If port 5055 is occupied, use `REDACT_PORT=5056 ./start.sh` and keep that setting for
+later starts. Docker publishes the port only on `127.0.0.1`.
+
+## Know the limits before using real documents
+
+- **Rules-based and Turkish-tuned.** There is no ML model or LLM inference.
+  **English name and address coverage is materially lower than Turkish coverage.**
+  Read every document and add missed findings; few findings do not mean low risk.
+- **Detection is not redaction. Redaction is not anonymization.** A human must review
+  findings, OCR and export readiness. Context can still identify a person or matter
+  after obvious identifiers are removed. No output is a legal opinion or a compliance
+  certification.
+- **Single-user, local workstation.** There is no multi-user isolation, hosted service,
+  or public demo. Keep it on your own machine; do not expose its port to a LAN or the
+  internet. Files and the database are unencrypted on local disk.
+- **Prototype quality.** The bundled synthetic corpus checks rules, not real-world
+  accuracy. OCR can misread text. DOCX/PDF export checks have limits; inspect the actual
+  exported file. Legacy `.doc` extraction uses macOS `textutil` and is unavailable in
+  the Linux Docker image; convert it locally to DOCX first.
+
+Read the [threat model](#threat-model), [accuracy audit](#accuracy-audit),
+[safety gates](#safety-gates) and [security policy](SECURITY.md) before using real files.
+
+## Stop, resume and keep your work
+
+```bash
+docker compose stop          # keep this install's data
+./start.sh                   # resume and print the same credentials
+```
+
+The Compose project keeps the database and `install.json` (admin credentials and
+session key) in its `database` volume, and uploads/exports in its `documents` volume.
+They survive rebuilds and container removal. Treat both volumes as confidential;
+back up both together while the app is stopped. They are separate from a manual
+Python install's `db/legal_documents.db` and `data/`. Run commands from the same clone
+and keep the Compose project name stable to reuse the same volumes.
+
+**Destructive reset, only when you want to discard this install:**
+`./start.sh --reset` removes its database, uploads, exports and credentials, then
+starts a fresh practice workspace. `docker compose down --volumes` also destroys
+those volumes. Ordinary `./start.sh` never uses either destructive option.
+
+For startup errors, run `docker compose logs workstation`. If Docker cannot connect,
+start your local Docker engine first. If credentials are missing or do not match an
+existing database, startup refuses to silently replace them: restore the matching
+volume backup. Do not copy `.env` or real documents into the image; its build context
+uses an allowlist. Dependency downloads need internet during build; the running app
+performs document processing locally without an external document service.
 
 ## What the engine is
 
@@ -19,7 +100,18 @@ Rules also mean rule-shaped limits — a pattern the gazetteer and the regular e
 do not cover is a pattern the engine will miss, which is why every finding is gated on
 human review.
 
-## Quick Start
+## Run without Docker
+
+Install Python 3.11+ and the local OCR binaries first:
+
+```bash
+# macOS
+brew install tesseract tesseract-lang poppler
+# Debian / Ubuntu
+sudo apt-get install tesseract-ocr tesseract-ocr-tur tesseract-ocr-eng poppler-utils
+```
+
+Then, from the clone:
 
 ```bash
 python3 -m venv .venv
@@ -29,11 +121,16 @@ export LEGAL_ANALYZER_ADMIN_PASSWORD="change-this-local-password"
 export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 python3 db/init_db.py        # keeps an existing database; use --reset to wipe (destructive)
 python3 db/migrate.py
+export LEGAL_ANALYZER_STOCK_DIR="$PWD/samples/documents"
 python3 classify.py
 python3 app.py
 ```
 
-Open `http://127.0.0.1:5000`.
+Open `http://127.0.0.1:5000/login` and sign in as `admin` with the password you set. Choose your own password; the string above is only a placeholder.
+
+The scanner adds files to the index; it does not perform review or approve exports.
+For your own local collection, change `LEGAL_ANALYZER_STOCK_DIR` in both the scanner
+and the app environment. Keep it set when restarting so indexed paths resolve.
 
 `LEGAL_ANALYZER_SECRET_KEY` signs session cookies and has **no default** — the app
 refuses to start without it, because a known signing key lets anyone forge an admin
@@ -92,14 +189,14 @@ authentication, or a compliance-audited pipeline, this project does not
 provide them today. Run it on a single machine, for a single reviewer, behind
 whatever OS-level access control that machine already has.
 
-## Running It Beyond Your Own Machine
+## Local WSGI operation
 
-`python3 app.py` is Flask's development server: one process, no restart supervision, and written for localhost. Anything longer-lived goes through the WSGI entry point instead:
+`python3 app.py` is Flask's development server: one process, no restart supervision, and written for localhost. For longer-lived local operation, use the WSGI entry point (the Docker command already does):
 
 ```bash
 pip install gunicorn
 export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-export LEGAL_ANALYZER_HTTPS=1
+# Keep HTTPS unset for this plain HTTP loopback example.
 gunicorn --workers 4 --bind 127.0.0.1:5000 wsgi:application
 ```
 
@@ -132,7 +229,7 @@ Behind a reverse proxy, `remote_addr` is the proxy unless it is configured to pa
 
 ### What this deployment is and is not
 
-This is single-tenant software. **Every authenticated user can see every document** — there is no per-user or per-organisation scoping in the schema — so an install serves one firm, on a network you control, behind TLS. It is not multi-tenant and should not be exposed to the public internet or shared between organisations.
+This is single-tenant software. **Every authenticated user can see every document** — there is no per-user or per-organisation scoping in the schema — so this remains a single-user local workstation. WSGI or TLS does not add user isolation or make it suitable for a shared server. Do not expose it to a LAN or the public internet.
 
 
 ## Migrations and Local Access Control
@@ -201,7 +298,7 @@ The current safety logic treats extraction gaps as unsafe:
 - Extraction `Complete`: automated text pass completed.
 - Extraction `Partial` or `Failed`: residual risk becomes `Unknown`.
 - Any extraction warning blocks external LLM use until OCR/manual review.
-- External hosted LLM use is allowed only when extraction is complete, residual risk is Low, critical findings are zero, no direct identifiers remain, redaction is completed, and human review is approved unless explicit auto-mode is enabled.
+- External hosted LLM use is allowed only when extraction is complete, residual risk is Low, critical findings are zero, no direct identifiers remain, redaction is completed, and human review is approved. There is no bypass of the approval — an undocumented `auto_mode_enabled` arm that substituted for it was removed (see `db/migrations/006_retire_auto_mode_bypass.sql`).
 - Documents that fail any external LLM gate condition are blocked or require review.
 - Detected findings are not the same thing as successful redaction.
 
@@ -213,8 +310,8 @@ The UI includes a Redaction Studio flow:
 - Optionally assign uploads to a local client/matter workspace; otherwise they go to `Unassigned`.
 - Run local extraction and privacy analysis immediately after upload.
 - Open the new document directly in a dedicated Redaction Studio workspace.
-- Review grouped findings, batch approve or dismiss lower-risk findings, inspect export gates, and compare preview/export options.
-- Export lower-assurance preview artifacts or reviewed DOCX redactions when the source and gates support it.
+- Review grouped findings, batch approve or dismiss lower-risk findings, and inspect export gates.
+- Export a reviewed DOCX or coordinate-reviewed PDF redaction when the source and gates support it.
 
 The UI also supports first-pass review actions:
 
@@ -224,7 +321,6 @@ The UI also supports first-pass review actions:
 - Mark redaction complete.
 - Approve or reject review.
 - Reset review state.
-- Export lower-assurance TXT/DOCX preview artifacts that are rebuilt from the review preview and are not layout-preserving.
 - Export an actual reviewed DOCX redaction artifact for DOCX source files only.
 
 Approval does not override the release gate. A document remains blocked unless every external LLM gate condition is satisfied.
@@ -318,7 +414,10 @@ Actual reviewed native redacted export supports DOCX and coordinate-reviewed PDF
 - Reviewed redacted PDF exports are also saved under `data/exports/document_<id>/` and recorded in the artifact timeline; artifact metadata never contains raw sensitive text or pseudonym mappings.
 - PDF export QA runs against the last saved export artifact when one exists (otherwise a freshly generated redaction) and checks: approved regions applied, approved sensitive text not extractable (including OCR text layers), metadata scrubbed, no annotations/comments remaining, and no unreviewed boxes. Remaining annotations are removed during export. QA reports include before/after visual thumbnails when local rendering is available, with a clear skip warning otherwise.
 - QA attributes extractable-text leaks to specific region ids, and the Studio offers a one-click "Reject QA-warning boxes" action for them.
-- Preview TXT/DOCX exports remain lower-assurance rebuilt artifacts and should not be treated as layout-preserving reviewed redactions.
+- There is no "preview export" download. The rebuilt lower-assurance TXT/DOCX preview (`GET /api/document/<id>/export`) was removed: it produced a
+  non-layout-preserving `<name>_redacted.txt` headed `PRIVACY-REVIEWED REDACTED EXPORT` that, before any review decision, contained the unredacted
+  source. The post-decision text is shown in the Studio review canvas (`GET /api/document/<id>/redaction-plan`), which resolves through the same code
+  as the reviewed export; the only downloads are the gated reviewed DOCX and PDF exports above.
 
 ## Default Inputs
 
@@ -351,7 +450,7 @@ The scanner supports `.udf` files for Turkish UYAP-style legal document review. 
 
 - Plain XML/text-like UDF files are parsed locally.
 - Package/zip-style UDF files are scanned for XML/text content.
-- Extracted UDF text enters the same classification, privacy finding, review, OCR/manual text, and lower-assurance preview export workflow.
+- Extracted UDF text enters the same classification, privacy finding, review, and OCR/manual text workflow.
 - Actual layout-preserving redacted export remains DOCX-only until real UDF package rewriting is validated against UYAP-compatible samples.
 
 ## Output Positioning

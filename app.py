@@ -42,11 +42,13 @@ from legal_analyzer.ocr import OCRToken, token_regions_for_sample
 from legal_analyzer.pdf_redactor import PdfRegion
 from legal_analyzer.privacy import (
     DIRECT_IDENTIFIER_CATEGORIES,
+    REDACTED_REVIEW_STATUSES,
     RELEASE_CLEARED_REVIEW_STATUSES,
     RESOLVED_REVIEW_STATUSES,
     analyze_privacy,
     refresh_release_state,
 )
+from legal_analyzer.redaction_plan import plan_segments
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -660,10 +662,8 @@ def pdf_export_blockers(conn: sqlite3.Connection, doc: sqlite3.Row) -> list[str]
         blockers.append("OCR output must be accepted or not required before PDF redaction export.")
     if not doc["redaction_completed"]:
         blockers.append("Redaction must be marked complete before reviewed PDF export.")
-    if not (doc["human_review_approved"] or doc["auto_mode_enabled"]):
-        blockers.append(
-            "Human review approval is required before reviewed PDF export unless explicit auto-mode is enabled."
-        )
+    if not doc["human_review_approved"]:
+        blockers.append("Human review approval is required before reviewed PDF export.")
     pending_regions = conn.execute(
         "SELECT COUNT(*) FROM pdf_redaction_regions WHERE document_id = ? AND review_status = 'pending'",
         (doc_id,),
@@ -737,14 +737,14 @@ def get_exportable_docx(conn: sqlite3.Connection, doc_id: int, audit_action: str
         return audited_error(conn, "Actual redacted export currently supports DOCX only.", 415, audit_action, doc_id)
     if not doc["redaction_completed"]:
         return audited_error(conn, "Redaction must be completed before actual redacted export.", 409, audit_action, doc_id)
-    # Same condition as the release gate's, which accepts explicit auto-mode in
-    # place of an approval (external_llm_gate_policy in privacy.py). Checking
-    # human_review_approved alone told an auto-mode user the document was
-    # "Allowed for external LLM use" while this endpoint answered 409.
-    if not (doc["human_review_approved"] or doc["auto_mode_enabled"]):
+    # The same condition as the release gate's (external_llm_gate_policy in
+    # privacy.py), and it has to stay the same one: when the two disagree the
+    # UI tells a lawyer the document is releasable while this endpoint refuses
+    # it. Both now require a real human approval and nothing else.
+    if not doc["human_review_approved"]:
         return audited_error(
             conn,
-            "Human review approval is required before actual redacted export unless explicit auto-mode is enabled.",
+            "Human review approval is required before actual redacted export.",
             409,
             audit_action,
             doc_id,
@@ -774,6 +774,54 @@ def get_exportable_docx(conn: sqlite3.Connection, doc_id: int, audit_action: str
             {"unreviewed_findings": unreviewed_findings},
         )
     return doc
+
+
+def document_source_text(conn: sqlite3.Connection, doc_id: int, doc: sqlite3.Row) -> tuple[str, str, str | None]:
+    """The text every rendering of this document resolves against: (text, source, warning).
+
+    Accepted OCR replaces the extraction, because that is the decision the
+    reviewer made: `ocr/accept` is the point at which OCR text is allowed to
+    affect findings, redaction and release readiness at all.
+    """
+    if (doc["ocr_status"] or "not_required") == "accepted":
+        pages = conn.execute(
+            """
+            SELECT text FROM ocr_pages
+            WHERE document_id = ? AND status = 'accepted' AND text IS NOT NULL AND text != ''
+            ORDER BY page_number
+            """,
+            (doc_id,),
+        ).fetchall()
+        return "\n\n".join(row["text"] for row in pages), "ocr_accepted", None
+    path = resolve_document_path(doc["filepath"])
+    if not path.exists():
+        return "", "extraction", "Source file was not found."
+    text, warning = extract_text(path)
+    return text, "extraction", warning
+
+
+def document_plan_segments(conn: sqlite3.Connection, doc_id: int, text: str, style: str = "placeholder"):
+    """The post-decision rendering of `text`, resolved server-side for every surface.
+
+    The browser canvas and the reviewed DOCX export both read this. Keeping the
+    resolution in one place is the point: they used to disagree about the same
+    document under the same decisions, and a lawyer was approving a rendering
+    that was not the deliverable.
+    """
+    findings = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT id, category, sample, placeholder, replacement_text, review_status,
+                   start_offset, end_offset
+            FROM privacy_findings
+            WHERE document_id = ?
+            ORDER BY COALESCE(start_offset, 0), id
+            """,
+            (doc_id,),
+        ).fetchall()
+    ]
+    return plan_segments(text, findings, REDACTED_REVIEW_STATUSES, style)
 
 
 def redaction_targets_for_document(conn: sqlite3.Connection, doc_id: int) -> list[RedactionTarget]:
@@ -854,6 +902,16 @@ def format_size(size: int) -> str:
 
 
 def build_docx(text: str) -> bytes:
+    """Build a minimal DOCX package from plain text.
+
+    No production route calls this any more: its one caller was the deleted
+    "Preview DOCX (rebuilt, lower assurance)" export, and a REBUILT package is
+    exactly what must not be handed to a lawyer as a deliverable -- the reviewed
+    export (`legal_analyzer/docx_redactor.py`) redacts the source package in
+    place instead. It is kept as a test fixture builder (`tests/test_exports.py`,
+    `tests/test_extraction.py`). Do not wire it back into an export route.
+    """
+
     def paragraph_xml(line: str) -> str:
         return f"<w:p><w:r><w:t xml:space=\"preserve\">{escape(line)}</w:t></w:r></w:p>"
 
@@ -961,7 +1019,6 @@ def refresh_document_state(conn: sqlite3.Connection, doc_id: int, ocr_status: st
         json.loads(doc["privacy_profile"] or "{}"),
         redaction_completed=bool(doc["redaction_completed"]),
         human_review_approved=bool(doc["human_review_approved"]),
-        auto_mode_enabled=bool(doc["auto_mode_enabled"]),
         ocr_status=status,
         **review_gate_counts(conn, doc_id),
     )
@@ -1148,8 +1205,8 @@ def save_uploaded_document(path: Path, original_name: str, conn: sqlite3.Connect
             title, language, version, date_detected, extraction_warning, extraction_status, privacy_profile,
             residual_risk, risk_summary, recommended_strategy, external_llm_readiness,
             human_review_required, redaction_status, redaction_completed, human_review_approved,
-            auto_mode_enabled, review_status, ocr_status, is_archive
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            review_status, ocr_status, is_archive
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             original_name,
@@ -1174,7 +1231,6 @@ def save_uploaded_document(path: Path, original_name: str, conn: sqlite3.Connect
             privacy["redaction_status"],
             1 if privacy["release_controls"]["redaction_completed"] else 0,
             1 if privacy["release_controls"]["human_review_approved"] else 0,
-            1 if privacy["release_controls"]["auto_mode_enabled"] else 0,
             review_status,
             ocr_status,
             1 if path.suffix.lower() == ".zip" else 0,

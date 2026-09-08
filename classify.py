@@ -94,8 +94,8 @@ def save_document(path: Path, base_dir: Path, conn: sqlite3.Connection) -> int:
             title, language, version, date_detected, extraction_warning, extraction_status, privacy_profile,
             residual_risk, risk_summary, recommended_strategy, external_llm_readiness,
             human_review_required, redaction_status, redaction_completed, human_review_approved,
-            auto_mode_enabled, review_status, ocr_status, is_archive
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            review_status, ocr_status, is_archive
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             path.name,
@@ -120,7 +120,6 @@ def save_document(path: Path, base_dir: Path, conn: sqlite3.Connection) -> int:
             privacy["redaction_status"],
             1 if privacy["release_controls"]["redaction_completed"] else 0,
             1 if privacy["release_controls"]["human_review_approved"] else 0,
-            1 if privacy["release_controls"]["auto_mode_enabled"] else 0,
             "needs_ocr" if privacy["extraction_status"]["status"] in {"Partial", "Failed"} else "pending_review",
             "queued" if privacy["extraction_status"]["status"] in {"Partial", "Failed"} else "not_required",
             1 if path.suffix.lower() == ".zip" else 0,

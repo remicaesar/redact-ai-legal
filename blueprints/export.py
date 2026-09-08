@@ -1,18 +1,30 @@
-"""Reviewed redacted export (DOCX/PDF), export QA, and preview export routes."""
+"""Reviewed redacted export (DOCX/PDF) and export QA routes.
+
+The "Preview TXT / Preview DOCX (lower assurance)" route that used to live
+here is deleted, not disabled. It served an ungated `<name>_redacted.txt`
+headed "PRIVACY-REVIEWED REDACTED EXPORT" whose body, before any review
+decision, was the complete unredacted source -- a file that reads as a
+deliverable and is not one. Reverting it to its pre-resolver behaviour was
+considered and rejected: that body redacted everything DETECTED, so it lied
+in the other direction whenever a reviewer dismissed a finding, telling the
+lawyer something was removed that the shipped file still contained. There is
+no honest and useful version of a rebuilt, non-layout-preserving artifact
+named like the deliverable, so it is gone. The review canvas
+(`GET /api/document/<id>/redaction-plan`) is where a lawyer sees the
+post-decision text; `redacted-export` below is the only download.
+"""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from io import BytesIO
 from pathlib import Path
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file
 
 from app import (
     audit_and_commit,
     audited_error,
-    build_docx,
     get_db,
     get_exportable_docx,
     get_pdf_document,
@@ -331,45 +343,3 @@ def api_document_redacted_export_qa(doc_id: int):
     artifact_conn.commit()
     artifact_conn.close()
     return jsonify(report)
-
-
-@export_bp.route("/api/document/<int:doc_id>/export")
-@require_roles("reviewer", "admin")
-def api_document_export(doc_id: int):
-    export_format = request.args.get("format", "txt").lower()
-    conn = get_db()
-    doc = conn.execute("SELECT id, filename, title, privacy_profile FROM documents WHERE id = ?", (doc_id,)).fetchone()
-    if not doc:
-        conn.close()
-        return jsonify({"error": "Document not found"}), 404
-    audit_and_commit(conn, "export.preview", document_id=doc_id, metadata={"format": export_format})
-    conn.close()
-
-    profile = json.loads(doc["privacy_profile"] or "{}")
-    redacted_text = profile.get("redacted_preview") or "No redacted preview available."
-    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in Path(doc["filename"]).stem)[:120]
-
-    if export_format == "txt":
-        body = "\n".join(
-            [
-                "PRIVACY-REVIEWED REDACTED EXPORT",
-                "LOWER-ASSURANCE PREVIEW EXPORT. This is not the layout-preserving reviewed DOCX redaction.",
-                "This is an anonymization-assisted, risk-reduced preview; it is not guaranteed anonymous.",
-                "",
-                redacted_text,
-            ]
-        )
-        return Response(
-            body,
-            mimetype="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f"attachment; filename={safe_stem}_redacted.txt"},
-        )
-    if export_format == "docx":
-        data = build_docx(redacted_text)
-        return send_file(
-            BytesIO(data),
-            as_attachment=True,
-            download_name=f"{safe_stem}_redacted.docx",
-            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-    return jsonify({"error": "Unsupported export format"}), 400

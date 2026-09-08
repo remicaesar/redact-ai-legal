@@ -192,6 +192,38 @@ class DocxRedactorTests(unittest.TestCase):
         self.assertIn("[CASE_NUMBER_1]", combined)
         self.assertIn("[PHONE_1]", combined)
 
+    def test_replacement_clipped_onto_a_paragraph_boundary_still_writes_its_placeholder(self):
+        """A region clipped so it begins ON a paragraph break must still be marked.
+
+        `build_part_spans` carries paragraph breaks as synthetic spans that own
+        no `w:t` node, so nothing is ever written to them -- a paragraph break is
+        not a character the document contains. A reviewer-added target may hold a
+        newline (the add-finding endpoint strips the ends, not the middle), so it
+        can match across a break; and when an earlier target already covers the
+        first half, the clip puts the survivor's start exactly on that synthetic
+        span. Writing the placeholder in the first span that OWNS a node, rather
+        than in the span the start falls in, is what keeps it from vanishing
+        while its characters are still removed -- text gone with no marker left
+        to say anything was redacted, which no export QA check reads as a
+        failure.
+        """
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.docx"
+            make_minimal_docx(source, ["Alfa Beta", "Gama Delta"])
+            data = redact_docx(
+                source,
+                [
+                    RedactionTarget("Alfa Beta", "[FIRST_1]"),
+                    RedactionTarget("Beta\nGama", "[SECOND_1]"),
+                ],
+            )
+        with ZipFile(BytesIO(data)) as archive:
+            document = archive.read("word/document.xml").decode("utf-8")
+        self.assertIn("[FIRST_1]", document)
+        self.assertIn("[SECOND_1]", document)
+        self.assertNotIn("Gama", document)
+        self.assertIn("Delta", document)
+
     def test_preserves_unaffected_runs_when_redacting_split_text(self):
         with TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.docx"

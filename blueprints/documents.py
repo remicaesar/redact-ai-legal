@@ -16,6 +16,8 @@ from app import (
     apply_reextraction,
     audit_and_commit,
     audited_error,
+    document_plan_segments,
+    document_source_text,
     format_size,
     get_db,
     matter_for_document,
@@ -26,7 +28,6 @@ from app import (
     template_user_context,
 )
 from legal_analyzer.classifier import supported_file
-from legal_analyzer.extraction import extract_text
 from legal_analyzer.status import compute_pipeline_status
 from legal_analyzer.taxonomy import OUTPUT_POSITIONING, TERMINOLOGY
 
@@ -119,6 +120,11 @@ def api_document_source_file(doc_id: int):
     return send_file(path, mimetype="application/pdf", download_name=doc["filename"], as_attachment=False)
 
 
+def _source_text_available(doc) -> bool:
+    """Accepted OCR text stands in for a source file that is gone; extraction does not."""
+    return (doc["ocr_status"] or "not_required") == "accepted" or resolve_document_path(doc["filepath"]).exists()
+
+
 @documents_bp.route("/api/document/<int:doc_id>/text")
 @require_roles("viewer", "reviewer", "admin")
 def api_document_text(doc_id: int):
@@ -130,23 +136,49 @@ def api_document_text(doc_id: int):
     if not doc:
         conn.close()
         return jsonify({"error": "Document not found"}), 404
-    if (doc["ocr_status"] or "not_required") == "accepted":
-        pages = conn.execute(
-            """
-            SELECT text FROM ocr_pages
-            WHERE document_id = ? AND status = 'accepted' AND text IS NOT NULL AND text != ''
-            ORDER BY page_number
-            """,
-            (doc_id,),
-        ).fetchall()
+    if not _source_text_available(doc):
         conn.close()
-        return jsonify({"text": "\n\n".join(row["text"] for row in pages), "source": "ocr_accepted", "warning": None})
-    conn.close()
-    path = resolve_document_path(doc["filepath"])
-    if not path.exists():
         return jsonify({"error": "Source file was not found"}), 404
-    text, warning = extract_text(path)
-    return jsonify({"text": text, "source": "extraction", "warning": warning})
+    text, source, warning = document_source_text(conn, doc_id, doc)
+    conn.close()
+    return jsonify({"text": text, "source": source, "warning": warning})
+
+
+@documents_bp.route("/api/document/<int:doc_id>/redaction-plan")
+@require_roles("viewer", "reviewer", "admin")
+def api_document_redaction_plan(doc_id: int):
+    """The post-decision rendering of this document, resolved server-side.
+
+    The review canvas draws these segments instead of deriving a redacted
+    rendering of its own in the browser. It used to replace each finding's
+    recorded offsets and let the NARROWEST span win an overlap, which is not
+    what the export does, so the canvas showed a company as [PERSON_5] followed
+    by " ve Ticaret A.Ş." in cleartext and left a defendant's name unredacted
+    that the export removed. Same resolver here, same resolver on export.
+    """
+    conn = get_db()
+    doc = conn.execute(
+        "SELECT filename, filepath, file_extension, ocr_status FROM documents WHERE id = ?",
+        (doc_id,),
+    ).fetchone()
+    if not doc:
+        conn.close()
+        return jsonify({"error": "Document not found"}), 404
+    if not _source_text_available(doc):
+        conn.close()
+        return jsonify({"error": "Source file was not found"}), 404
+    style = "mask" if request.args.get("style") == "mask" else "placeholder"
+    text, source, warning = document_source_text(conn, doc_id, doc)
+    segments = document_plan_segments(conn, doc_id, text, style)
+    conn.close()
+    return jsonify(
+        {
+            "source": source,
+            "warning": warning,
+            "has_text": bool(text.strip()),
+            "segments": [segment.as_dict() for segment in segments],
+        }
+    )
 
 
 @documents_bp.route("/api/documents")
@@ -182,7 +214,7 @@ def api_documents():
             d.title, d.language, d.version, d.date_detected,
             d.residual_risk, d.recommended_strategy, d.extraction_warning, d.extraction_status,
             d.external_llm_readiness, d.human_review_required, d.redaction_status,
-            d.redaction_completed, d.human_review_approved, d.auto_mode_enabled,
+            d.redaction_completed, d.human_review_approved,
             d.review_status, d.ocr_status, d.reviewed_at,
             m.id AS matter_id,
             m.name AS matter_name,

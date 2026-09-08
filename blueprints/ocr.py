@@ -287,7 +287,6 @@ def api_ocr_accept(doc_id: int):
         profile,
         redaction_completed=False,
         human_review_approved=False,
-        auto_mode_enabled=bool(doc["auto_mode_enabled"]),
         ocr_status="accepted",
         **review_gate_counts(conn, doc_id),
     )

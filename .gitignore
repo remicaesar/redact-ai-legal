@@ -20,6 +20,7 @@ data/exports/
 .claude/
 
 .env
+.onboarding-qa/
 
 # Client roster and local scan paths are confidential; only the *.example.json
 # templates are committed.

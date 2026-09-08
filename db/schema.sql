@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS documents (
     redaction_status TEXT DEFAULT 'Detected findings only - not redacted successfully',
     redaction_completed INTEGER DEFAULT 0,
     human_review_approved INTEGER DEFAULT 0,
+    -- RETIRED, read by nothing. This was the auto-mode release bypass: the release
+    -- gate and the reviewed DOCX/PDF exports accepted it in place of
+    -- human_review_approved, and it could only ever let a document out that no
+    -- person had approved. Every read is gone; tests/test_auto_mode_removed.py
+    -- fails if one comes back. The column itself is kept because SQLite has no
+    -- DROP COLUMN IF EXISTS and no migration here may touch a documents column
+    -- (see "Migrations" in AGENTS.md), so dropping it would split this file from
+    -- every already-migrated database. Do not read it, and do not write it.
     auto_mode_enabled INTEGER DEFAULT 0,
     review_status TEXT DEFAULT 'pending_review',
     ocr_status TEXT DEFAULT 'not_required',
@@ -295,7 +303,9 @@ CREATE INDEX IF NOT EXISTS idx_documents_residual_risk ON documents(residual_ris
 CREATE INDEX IF NOT EXISTS idx_documents_extraction_status ON documents(extraction_status);
 CREATE INDEX IF NOT EXISTS idx_documents_external_llm_readiness ON documents(external_llm_readiness);
 CREATE INDEX IF NOT EXISTS idx_documents_human_review_required ON documents(human_review_required);
-CREATE INDEX IF NOT EXISTS idx_documents_release_controls ON documents(redaction_completed, human_review_approved, auto_mode_enabled);
+-- Databases created before the auto-mode bypass was removed keep a third,
+-- retired column in this index. It is a dead byte per row, not a behaviour.
+CREATE INDEX IF NOT EXISTS idx_documents_release_controls ON documents(redaction_completed, human_review_approved);
 CREATE INDEX IF NOT EXISTS idx_documents_review_status ON documents(review_status);
 CREATE INDEX IF NOT EXISTS idx_documents_ocr_status ON documents(ocr_status);
 CREATE INDEX IF NOT EXISTS idx_matters_client ON matters(client_id);

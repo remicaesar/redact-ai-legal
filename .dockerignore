@@ -1,0 +1,27 @@
+# Allowlist: never send local documents, databases, credentials or reports to a build.
+**
+!Dockerfile
+!requirements.txt
+!app.py
+!wsgi.py
+!classify.py
+!legal_analyzer/
+!legal_analyzer/*.py
+!blueprints/
+!blueprints/*.py
+!db/
+!db/*.py
+!db/schema.sql
+!db/migrations/
+!db/migrations/*.sql
+!templates/
+!templates/**
+!static/
+!static/**
+!docker/
+!docker/*.py
+!docker/requirements.txt
+!samples/
+!samples/documents/
+!samples/documents/*.docx
+!samples/documents/*.pdf

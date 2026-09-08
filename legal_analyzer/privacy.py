@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .docx_redactor import TURKISH_I_FORMS
 from .taxonomy import OUTPUT_POSITIONING, TERMINOLOGY
 
-from legal_analyzer.turkish_names import COMPANY_SUFFIX_RE, detect_person_names
+from legal_analyzer.turkish_names import COMPANY_SUFFIX_RE, detect_person_names, tr_fold
 
 RISK_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 EXTERNAL_LLM_BLOCKED = "Blocked for external LLM use until redaction is completed and reviewed."
@@ -566,6 +566,16 @@ _COMPANY_SUFFIXES = (
     _i_forms("LLC"),
 )
 
+# Share the trigger vocabulary with address-boundary detection. Match the
+# triggers alone there: a full context sweep can hide a later trigger beside
+# an address ("hasta olan hasta Gül Sok"). Keep the existing word boundaries.
+_CONTEXT_TRIGGERS = {
+    "health_data": r"\b(?:sağlık|saglik|hasta|hastane|cerrahi|tedavi|teşhis|teshis|reçete|recete|medical|health|patient)\b",
+    "criminal_allegation": r"\b(?:suç|suc|şüpheli|supheli|sanık|sanik|cezai|kamu davası|arama|el koyma|soruşturma|sorusturma)\b",
+    "privileged_or_confidential": r"\b(?:müvekkil|muvekkil|vekil|av\.|avukat|attorney-client|privileged|gizli|confidential|ticari sır|trade secret)\b",
+}
+_CONTEXT_TRIGGER_RE = re.compile("|".join(_CONTEXT_TRIGGERS.values()), re.IGNORECASE | re.UNICODE)
+
 DETECTION_RULES = [
     DetectionRule("email_address", r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "HIGH", "Replace with consistent pseudonym", "EMAIL"),
     DetectionRule("phone_number", r"(?<!\d)(?:\+90|0)?\s?(?:5\d{2}|2\d{2}|3\d{2}|4\d{2})[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}(?!\d)", "HIGH", "Replace with consistent pseudonym", "PHONE"),
@@ -610,12 +620,12 @@ DETECTION_RULES = [
     # 8 false positives with gold-set recall held at 1.0. Accepted cost: an
     # address written as a bare "Beşiktaş / İstanbul", with no street or
     # neighbourhood, is no longer flagged as an address.
-    DetectionRule("address", r"(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2}\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
+    DetectionRule("address", r"(?P<address_prefix>(?:[A-ZÇĞİÖŞÜ][a-zA-Z0-9çğıöşüÇĞİÖŞÜ]*\s+){0,2})\b(?:mah\.?|mahallesi|cad\.?|caddesi|sok\.?|sokak|sokağı|sokagi|bulvarı|bulvari|apartmanı|apartmani|apt\.?|[İi]lçesi|ilcesi|köyü|koyu)\b(?:[^.\n]|(?<=\d)\.){0,140}", "HIGH", "Generalize or replace with consistent pseudonym", "ADDRESS"),
     DetectionRule("date", r"\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", "MEDIUM", "Generalize unless legally necessary", "DATE"),
     DetectionRule("money_amount", r"\b(?:USD|EUR|TRY|TL|₺|\$|€)\s?\d[\d.,]*|\b\d[\d.,]*\s?(?:USD|EUR|TRY|TL|₺|dolar|euro)\b", "MEDIUM", "Generalize or keep if legally necessary", "AMOUNT"),
-    DetectionRule("health_data", r"\b(?:sağlık|saglik|hasta|hastane|cerrahi|tedavi|teşhis|teshis|reçete|recete|medical|health|patient)\b" + _CONTEXT_SWEEP_CHAR + r"{0,120}", "CRITICAL", "Flag for human legal review", "SENSITIVE_HEALTH_DATA"),
-    DetectionRule("criminal_allegation", r"\b(?:suç|suc|şüpheli|supheli|sanık|sanik|cezai|kamu davası|arama|el koyma|soruşturma|sorusturma)\b" + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "CRIMINAL_ALLEGATION"),
-    DetectionRule("privileged_or_confidential", r"\b(?:müvekkil|muvekkil|vekil|av\.|avukat|attorney-client|privileged|gizli|confidential|ticari sır|trade secret)\b" + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "PRIVILEGED_CONTENT"),
+    DetectionRule("health_data", _CONTEXT_TRIGGERS["health_data"] + _CONTEXT_SWEEP_CHAR + r"{0,120}", "CRITICAL", "Flag for human legal review", "SENSITIVE_HEALTH_DATA"),
+    DetectionRule("criminal_allegation", _CONTEXT_TRIGGERS["criminal_allegation"] + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "CRIMINAL_ALLEGATION"),
+    DetectionRule("privileged_or_confidential", _CONTEXT_TRIGGERS["privileged_or_confidential"] + _CONTEXT_SWEEP_CHAR + r"{0,160}", "CRITICAL", "Flag for human legal review", "PRIVILEGED_CONTENT"),
     # The role word alone, deliberately NOT the surrounding clause. A party role
     # is a re-identification *signal* for a reviewer to weigh, not an identifier.
     # Trailing context ([^.\n]{0,120}) made this span the longest at its start,
@@ -638,8 +648,23 @@ DETECTION_RULES = [
     DetectionRule("company_name", r"\b[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9&.,'\- ]{2,90}?\s(?:" + "|".join(_COMPANY_SUFFIXES) + r")(?!\w)", "HIGH", "Replace with consistent pseudonym", "COMPANY", flags=re.UNICODE),
 ]
 
+# Separator WITHIN a captured name: spaces and tabs only, never a line break --
+# the same rule, for the same reason, as turkish_names._SEP. A person name does
+# not wrap across lines, and "\s+" here let the capture swallow the next line's
+# words: "Av. Şeyma Karaduman\nBaro Sicil No: ..." was captured whole, as
+# 'Şeyma Karaduman\nBaro Sicil'. That sample is then unusable twice over. It
+# hashes to a different pseudonym key than the clean 'Şeyma Karaduman' the
+# gazetteer path finds at the same offset, so one lawyer became [PERSON_1] and
+# [PERSON_2] in one document; and it can never be redacted from the exported
+# DOCX, because a DOCX part's text is the concatenation of its w:t runs and
+# contains no newline at the paragraph boundary. The gap BEFORE the capture
+# keeps "\s+": a label may legitimately sit on its own line ("VEKİLİ:\nAv. X"),
+# and that gap is not part of the span.
+_NAME_SEP = r"[ \t]+"
+
 PERSON_CONTEXT_RE = re.compile(
-    r"\b(?:Av\s?\.|Av\b|Avukat|Dr\s?\.|Dr\b|Sayın|Sn\.?|Mr\.?|Ms\.?)\s+([A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü'\-]+(?:\s+[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü'\-]+){1,3})"
+    r"\b(?:Av\s?\.|Av\b|Avukat|Dr\s?\.|Dr\b|Sayın|Sn\.?|Mr\.?|Ms\.?)\s+"
+    r"([A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü'\-]+(?:" + _NAME_SEP + r"[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü'\-]+){1,3})"
 )
 
 ROLE_PERSON_RE = re.compile(
@@ -647,7 +672,7 @@ ROLE_PERSON_RE = re.compile(
     r"|borçlu|borclu|alacaklı|alacakli|kiracı|kiraci|kiraya\s+veren|tanık|tanik|mağdur|magdur"
     r"|katılan|katilan|müdahil|mudahil|[İi]şçi|isci|[İi]şveren|isveren|hasta|mirasçı|mirasci|vasi)"
     r"\s+(?:[a-zçğıöşü]+\s+)?"
-    r"([A-ZÇĞİÖŞÜ][a-zçğıöşü'\-]+(?:\s+[A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ'\-]+){1,2})"
+    r"([A-ZÇĞİÖŞÜ][a-zçğıöşü'\-]+(?:" + _NAME_SEP + r"[A-ZÇĞİÖŞÜ][a-zA-ZçğıöşüÇĞİÖŞÜ'\-]+){1,2})"
 )
 
 
@@ -749,6 +774,31 @@ _CONTEXT_PLACEHOLDER_PREFIXES = {
 # "),", and "(" are wordless.
 _SEGMENT_WORD_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
 
+# Clause punctuation a cut can orphan at the FRONT of a leftover segment.
+#
+# The address rule deliberately stops before an abbreviation's period: its tail
+# is (?:[^.\n]|(?<=\d)\.){0,140}, and "sok\.?" backtracks off the dot so the
+# trailing \b can hold. So in "hasta Gul Sok. 5 adresinde ikamet etmektedir"
+# the address span is "Gul Sok" [6,13) and the period at 13 -- which belongs to
+# "Sok." -- lands outside it. The health span covers the whole clause and is cut
+# around the address, so that orphaned period became the FIRST character of the
+# trailing health finding: '. 5 adresinde ikamet etmektedir'. A finding's sample
+# is what a reviewer reads and what the exporter searches for, and a CRITICAL
+# health finding that opens on another rule's abbreviation dot reads as a bug in
+# the reviewer UI.
+#
+# Only whitespace and clause separators are consumed, never a letter, digit,
+# currency symbol or bracket: dropping ".5 mg" to "5 mg" is right, dropping
+# "(HIV" to "HIV" or "TL500" is not this function's call to make. A punctuation
+# character carries no identifier, so no coverage that matters is lost -- and a
+# segment that is ONLY punctuation was already dropped by
+# _segment_is_reportable(), which counts words, not characters.
+#
+# No "^" anchor: this is used as .match(text, start, end), which already
+# anchors at start, while "^" would additionally demand the real start of a
+# line and so silently never fire at any offset past the first character.
+_SEGMENT_LEADING_NOISE_RE = re.compile(r"[\s.,;:]+")
+
 # All-capital abbreviations that LABEL a direct identifier rather than say
 # anything themselves. They are the only reason a leftover segment can consist
 # of a single all-caps token that is not content -- "(TCKN:" is the punctuation
@@ -843,11 +893,11 @@ def _context_segment_findings(
     prefix = _CONTEXT_PLACEHOLDER_PREFIXES[finding["category"]]
     segments = []
     for index, (start, end) in enumerate(spans):
-        raw = text[start:end]
-        value = raw.strip()
+        noise = _SEGMENT_LEADING_NOISE_RE.match(text, start, end)
+        offset = noise.end() if noise else start
+        value = text[offset:end].strip()
         if not value or not _segment_is_reportable(value, is_leading=index == 0):
             continue
-        offset = start + (len(raw) - len(raw.lstrip()))
         # The context finding being replaced already consumed a placeholder
         # number, so the segments start one above it and the preview shows a gap
         # ("[SENSITIVE_HEALTH_DATA_2]" with no _1). Nothing parses placeholder
@@ -928,13 +978,49 @@ def _cut_identifiers_from_context_findings(
     return result
 
 
+def _address_start(match: re.Match, text: str, triggers: list[tuple[int, int]]) -> int:
+    """Exclude a preceding context trigger without case-narrowing street names.
+
+    IGNORECASE is needed for "gül sok" as well as "GÜL SOK". It also lets
+    the two-word prefix absorb "hasta" in "hasta Gül Sok". Cut that prefix
+    after a context trigger only if another street-name word remains before
+    the structure word. "Sağlık Caddesi" must keep Sağlık as its name.
+
+    A multiword trigger can begin before the regex match ("ticari sır Gül
+    Sok" matches from "sır"); use its complete span, not a prefix-token list.
+    Ambiguous compound names containing a trigger can be split this way too,
+    but the excluded trigger stays covered by its CRITICAL context finding.
+    No address tail or context sweep is shortened here.
+
+    The loop scans every trigger because the earliest one in the document is
+    often NOT the applicable one -- in "hasta olan hasta<tab>Gul Sok" the address
+    match starts at the SECOND "hasta", so the first ends before the span and
+    must be skipped, not taken. At most one cut can actually apply, though:
+    the prefix is two words at most, so once start has moved past a trigger the
+    only remaining candidate is the second prefix word, whose remainder is
+    whitespace and fails the guard above. Measured over 66,528 synthetic
+    trigger/filler/structure-word analyses: 46,620 matches took one cut, 19,908
+    took none, none took two. So the loop is a scan for the right trigger, not
+    an accumulator -- do not "simplify" it to triggers[0].
+    """
+    start = match.start()
+    prefix_end = match.end("address_prefix")
+    for trigger_start, trigger_end in triggers:
+        if trigger_start >= prefix_end:
+            break
+        if start < trigger_end < prefix_end:
+            remainder = text[trigger_end:prefix_end]
+            if remainder.strip():
+                start = trigger_end + len(remainder) - len(remainder.lstrip())
+    return start
+
+
 def analyze_privacy(
     filename: str,
     text: str,
     extraction_warning: str | None = None,
     redaction_completed: bool = False,
     human_review_approved: bool = False,
-    auto_mode_enabled: bool = False,
     ocr_status: str = "not_required",
 ) -> dict:
     """Create a structured risk map and an anonymization-assisted preview."""
@@ -942,6 +1028,7 @@ def analyze_privacy(
     placeholder_state: dict[tuple[str, str], str] = {}
     counters: Counter[str] = Counter()
     named_court_spans = _named_court_spans(text)
+    context_triggers = [match.span() for match in _CONTEXT_TRIGGER_RE.finditer(text)]
 
     for rule in DETECTION_RULES:
         if rule is GENERIC_COURT_SUFFIX_RULE:
@@ -962,6 +1049,9 @@ def analyze_privacy(
             # leaves it, so narrowing the span is the side that makes them agree.
             if rule.category == "turkish_national_id" and match.lastindex:
                 value, start, end = match.group(1).strip(), match.start(1), match.end(1)
+            elif rule.category == "address":
+                start, end = _address_start(match, text, context_triggers), match.end()
+                value = text[start:end].strip()
             else:
                 value, start, end = match.group(0).strip(), match.start(), match.end()
             if not value:
@@ -1011,7 +1101,6 @@ def analyze_privacy(
         extraction_status,
         redaction_completed=redaction_completed,
         human_review_approved=human_review_approved,
-        auto_mode_enabled=auto_mode_enabled,
         ocr_status=ocr_status,
     )
     review_required = human_review_required(gate, residual_risk, findings, extraction_status, context)
@@ -1032,7 +1121,6 @@ def analyze_privacy(
         "release_controls": {
             "redaction_completed": redaction_completed,
             "human_review_approved": human_review_approved,
-            "auto_mode_enabled": auto_mode_enabled,
         },
         "llm_ingestion": llm_ingestion_recommendation(gate, residual_risk, findings, extraction_status, ocr_status),
         "human_review_checklist": human_review_checklist(context, findings, extraction_status, gate, ocr_status),
@@ -1052,8 +1140,29 @@ def _finding(category: str, value: str, risk: str, action: str, placeholder: str
     }
 
 
+def _pseudonym_key(value: str) -> str:
+    """Fold a matched value to the key its pseudonym is remembered under.
+
+    str.lower() is not Turkish-aware, and the screen promises "consistent
+    pseudonymization". Python lowercases the ASCII "I" of "DAVALI" to a dotted
+    "i", while the same role spelled "Davalı" already carries the dotless "ı" --
+    two different strings, so one party role was issued [PARTY_ROLE_2] in the
+    heading and [PARTY_ROLE_3] four lines later. tr_fold is the repo's existing
+    folding helper (legal_analyzer/turkish_names.py); it maps the dotted/dotless
+    pairs explicitly before casefolding, and it is already what the given-name
+    gazetteer matches on, so this reuses that scheme rather than adding another.
+
+    Whitespace runs collapse too, so a name split by a DOCX run boundary or a
+    wrapped line ("Şeyma  Karaduman") keeps the pseudonym it was first given.
+
+    This is the KEY only. The finding's value, its span and the placeholder's
+    visible text are untouched -- the folded form is never written anywhere.
+    """
+    return tr_fold(re.sub(r"\s+", " ", value)).strip()
+
+
 def _placeholder_for(prefix: str, value: str, counters: Counter[str], state: dict[tuple[str, str], str]) -> str:
-    key = (prefix, value.lower())
+    key = (prefix, _pseudonym_key(value))
     if key not in state:
         counters[prefix] += 1
         state[key] = f"[{prefix}_{counters[prefix]}]"
@@ -1271,7 +1380,6 @@ def external_llm_gate_policy(
     extraction_status: dict,
     redaction_completed: bool = False,
     human_review_approved: bool = False,
-    auto_mode_enabled: bool = False,
     unresolved_critical_count: int | None = None,
     direct_identifiers_remaining: bool | None = None,
     ocr_status: str = "not_required",
@@ -1296,8 +1404,14 @@ def external_llm_gate_policy(
         failed_conditions.append("No direct identifiers may remain in detected findings.")
     if not redaction_completed:
         failed_conditions.append("Redaction pass must be completed.")
-    if not (human_review_approved or auto_mode_enabled):
-        failed_conditions.append("Human review approval is required unless explicit auto-mode is enabled.")
+    # Deliberately unconditional. There was an `or auto_mode_enabled` arm here
+    # that substituted a stored flag for a person's approval; it had no UI, no
+    # indicator and no audit surface, and it could only ever let a document out
+    # that nobody had approved. It was removed rather than made visible. An
+    # automated or batch mode, if it is ever wanted, is a feature to design with
+    # its own visible switch and audit trail -- not an arm on this condition.
+    if not human_review_approved:
+        failed_conditions.append("Human review approval is required.")
 
     allowed = not failed_conditions
     if allowed:
@@ -1319,7 +1433,7 @@ def external_llm_gate_policy(
             "Critical findings = 0",
             "No direct identifiers remain",
             "Redaction pass completed",
-            "Human review approved unless explicit auto-mode is enabled",
+            "Human review approved",
         ],
     }
 
@@ -1380,7 +1494,6 @@ def refresh_release_state(
     privacy_profile: dict,
     redaction_completed: bool = False,
     human_review_approved: bool = False,
-    auto_mode_enabled: bool = False,
     unresolved_critical_count: int | None = None,
     direct_identifiers_remaining: bool | None = None,
     remaining_findings: list[dict] | None = None,
@@ -1418,7 +1531,6 @@ def refresh_release_state(
         extraction_status,
         redaction_completed=redaction_completed,
         human_review_approved=human_review_approved,
-        auto_mode_enabled=auto_mode_enabled,
         unresolved_critical_count=unresolved_critical_count,
         direct_identifiers_remaining=direct_identifiers_remaining,
         ocr_status=ocr_status,
@@ -1435,7 +1547,6 @@ def refresh_release_state(
     privacy_profile["release_controls"] = {
         "redaction_completed": redaction_completed,
         "human_review_approved": human_review_approved,
-        "auto_mode_enabled": auto_mode_enabled,
     }
     privacy_profile["llm_ingestion"] = llm_ingestion_recommendation(gate, residual_risk, findings, extraction_status, ocr_status)
     privacy_profile["human_review_checklist"] = human_review_checklist(context, findings, extraction_status, gate, ocr_status)

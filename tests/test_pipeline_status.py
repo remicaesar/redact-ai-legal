@@ -21,7 +21,6 @@ def doc_row(**overrides) -> dict:
         "ocr_status": "not_required",
         "redaction_completed": 0,
         "human_review_approved": 0,
-        "auto_mode_enabled": 0,
         "external_llm_readiness": "Blocked until redaction is completed and reviewed",
         "privacy_profile": json.dumps({"external_llm_gate": {"allowed": False, "failed_conditions": ["Redaction pass must be completed."]}}),
     }
@@ -105,17 +104,34 @@ class PipelineStatusTests(unittest.TestCase):
                 "ocr_status": "not_required",
                 "redaction_completed": 1,
                 "human_review_approved": 1,
-                "auto_mode_enabled": 0,
                 "external_llm_readiness": "Blocked until redaction is completed and reviewed",
             }
         )
         self.assertEqual(status["pipeline_stage"], STAGE_BLOCKED)
         self.assertIn("Blocked until redaction", status["pipeline_message"])
 
-    def test_auto_mode_counts_as_approval(self):
+    def test_retired_auto_mode_column_does_not_count_as_approval(self):
+        """A leftover auto_mode_enabled = 1 must not read as a human approval.
+
+        The column is retired but still present on migrated databases (see
+        db/migrations/006_retire_auto_mode_bypass.sql), and compute_pipeline_status
+        takes whatever the documents row carries. It used to accept that flag in
+        place of human_review_approved; a row still carrying it must now sit at
+        "awaiting approval" like any other unapproved document, and the cached
+        "allowed" gate in the profile must not talk it past that stage either.
+        """
         profile = json.dumps({"external_llm_gate": {"allowed": True, "failed_conditions": []}})
         status = compute_pipeline_status(
             doc_row(redaction_completed=1, auto_mode_enabled=1, privacy_profile=profile)
+        )
+        self.assertEqual(status["pipeline_stage"], STAGE_AWAITING_APPROVAL)
+        self.assertNotEqual(status["pipeline_stage"], STAGE_READY)
+
+    def test_approved_document_is_ready(self):
+        """The other direction, so the test above cannot pass by always blocking."""
+        profile = json.dumps({"external_llm_gate": {"allowed": True, "failed_conditions": []}})
+        status = compute_pipeline_status(
+            doc_row(redaction_completed=1, human_review_approved=1, privacy_profile=profile)
         )
         self.assertEqual(status["pipeline_stage"], STAGE_READY)
 

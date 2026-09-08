@@ -7,6 +7,7 @@ from unittest import mock
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import tests.env_setup  # noqa: F401  -- sets LEGAL_ANALYZER_SECRET_KEY before app is imported
@@ -232,6 +233,24 @@ class AppWorkflowTests(unittest.TestCase):
     def login(self, username: str, password: str = "secret", client=None):
         active_client = client or self.client
         return active_client.post("/login", json={"username": username, "password": password})
+
+    def canvas_segments(self, doc_id: int) -> list[dict]:
+        """What the review canvas draws, as the server resolved it.
+
+        `buildDocHtml` in studio.html renders exactly these segments and decides
+        nothing itself, and `redacted-export` runs the same resolver, so a claim
+        asserted here is a claim about both the surface the lawyer reviews and
+        the file they receive.
+        """
+        plan = self.client.get(f"/api/document/{doc_id}/redaction-plan")
+        self.assertEqual(plan.status_code, 200, plan.get_data(as_text=True))
+        self.assertTrue(plan.json["has_text"], plan.json)
+        return plan.json["segments"]
+
+    def segment_covering(self, segments: list[dict], offset: int) -> dict:
+        covering = [segment for segment in segments if segment["start"] <= offset < segment["end"]]
+        self.assertEqual(len(covering), 1, f"offset {offset} is not covered exactly once: {segments}")
+        return covering[0]
 
     def test_docx_redacted_export_requires_redaction_and_approval(self):
         blocked = self.client.get("/api/document/1/redacted-export?format=docx")
@@ -1133,7 +1152,10 @@ class AppWorkflowTests(unittest.TestCase):
         review = viewer_client.post("/api/document/1/review", json={"action": "approve"})
         self.assertEqual(review.status_code, 403)
 
-        export = viewer_client.get("/api/document/1/export?format=txt")
+        # The reviewer-only download. (This used to check the lower-assurance
+        # `/export?format=txt` preview, which no longer exists; the role
+        # boundary it was covering is the one asserted here.)
+        export = viewer_client.get("/api/document/1/redacted-export?format=docx")
         self.assertEqual(export.status_code, 403)
 
         audit = viewer_client.get("/api/audit-log")
@@ -1217,6 +1239,140 @@ class AppWorkflowTests(unittest.TestCase):
         audit = admin_client.get("/api/audit-log?action=document.upload")
         self.assertEqual(audit.status_code, 200)
         self.assertGreaterEqual(audit.json["total"], 1)
+
+    def test_address_context_boundary_survives_review_preview_and_docx_export(self):
+        for trigger, category in (
+            ("hasta", "health_data"),
+            ("şüpheli", "criminal_allegation"),
+            ("ticari sır", "privileged_or_confidential"),
+        ):
+            with self.subTest(trigger=trigger):
+                text = f"{trigger} Gül Sok. 5 adresinde ikamet etmektedir"
+                source = self.tmp_path / "boundary.docx"
+                make_docx(source, text)
+                with mock.patch.object(app_module, "UPLOAD_DIR", self.tmp_path / "uploads"):
+                    uploaded = self.client.post(
+                        "/api/upload",
+                        data={"file": (BytesIO(source.read_bytes()), source.name)},
+                        content_type="multipart/form-data",
+                    )
+                self.assertEqual(uploaded.status_code, 200)
+                doc = uploaded.json
+                base = f"/api/document/{doc['id']}"
+                address = [f for f in doc["findings"] if f["category"] == "address"]
+                self.assertEqual([(f["sample"], f["start_offset"], f["end_offset"]) for f in address],
+                                 [("Gül Sok", len(trigger) + 1, len(trigger) + 8)])
+                contexts = [f for f in doc["findings"] if f["category"] == category]
+                leading = [f for f in contexts if f["sample"] == trigger]
+                self.assertEqual(len(leading), 1, contexts)
+                self.assertEqual((leading[0]["start_offset"], leading[0]["end_offset"]), (0, len(trigger)))
+                self.assertEqual(leading[0]["risk"], "CRITICAL")
+                # The clause after the address keeps a CRITICAL finding, and it
+                # starts on the "5" -- not on the "Sok." period the address rule
+                # leaves outside its own span. No finding reaching a reviewer
+                # may open on whitespace or a clause separator.
+                tail_start = text.index(". 5") + len(". ")
+                tail = [f for f in contexts
+                        if (f["start_offset"], f["end_offset"]) == (tail_start, len(text))]
+                self.assertEqual(len(tail), 1, contexts)
+                self.assertEqual([], [f["sample"] for f in doc["findings"]
+                                      if f["sample"][:1] in ".,;: "])
+
+                preview = doc["privacy_profile"]["redacted_preview"]
+                self.assertIn(leading[0]["replacement_text"], preview)
+                self.assertIn(address[0]["replacement_text"], preview)
+                self.assertNotIn(trigger, preview)
+                self.assertNotIn("Gül Sok", preview)
+
+                # The three invariants above are measured on the detector's own
+                # output. They are only worth anything if they survive to what
+                # the reviewer decides against and to what the reviewer
+                # receives, so they are re-asserted on both of those surfaces.
+                #
+                # This used to be `GET /export?format=txt` compared against the
+                # detection-time `redacted_preview` string. That route is gone:
+                # it was the ungated "Preview TXT (lower assurance)" download,
+                # and it handed out a file named `<name>_redacted.txt` headed
+                # "PRIVACY-REVIEWED REDACTED EXPORT" whose body, before any
+                # review decision, was the complete unredacted source. What
+                # remains is the contract the shared resolver established -- the
+                # review canvas and the exported reviewed DOCX are one
+                # rendering -- so the guarantee is pinned there instead, on both
+                # sides of review. Do NOT re-point this at `redacted_preview`
+                # alone: that snapshot is taken at detection time and moves with
+                # the detector, so it agrees with a broken boundary just as
+                # readily as with a correct one.
+                pre_review = self.canvas_segments(doc["id"])
+                # (i) the address span the reviewer can see and click begins AT
+                #     the address, not inside the trigger word before it;
+                self.assertEqual(
+                    [(s["start"], s["end"], s["source_text"]) for s in pre_review if s["category"] == "address"],
+                    [(len(trigger) + 1, len(trigger) + 8, "Gül Sok")], pre_review)
+                # (ii) the trigger keeps a span of its own, carrying the CRITICAL
+                #      finding that covers it whole -- it is not folded into the
+                #      HIGH address span next to it;
+                trigger_span = self.segment_covering(pre_review, 0)
+                self.assertEqual((trigger_span["start"], trigger_span["end"], trigger_span["source_text"]),
+                                 (0, len(trigger), trigger), pre_review)
+                self.assertIn(leading[0]["id"], trigger_span["finding_ids"], pre_review)
+                # (iii) nothing the reviewer is shown as a finding opens on
+                #       whitespace or a clause separator.
+                self.assertEqual([], [s["source_text"] for s in pre_review
+                                      if s["kind"] != "text" and s["source_text"][:1] in ".,;: "], pre_review)
+                self.assertEqual(self.client.get(base + "/redacted-export?format=docx").status_code, 409)
+
+                # Deciding the address alone cannot clear the context finding.
+                reviewed = self.client.post(f"/api/finding/{address[0]['id']}/review", json={"action": "approve"})
+                self.assertEqual(reviewed.status_code, 200)
+                self.assertEqual(self.client.post(base + "/review", json={"action": "mark_redacted"}).status_code, 409)
+                pending = self.client.get(base).json["privacy_profile"]["external_llm_gate"]
+                self.assertFalse(pending["allowed"])
+                self.assertGreater(pending["critical_count"], 0)
+
+                reviewed = self.client.post(base + "/findings/review-batch", json={"action": "approve"})
+                self.assertEqual(reviewed.status_code, 200)
+                self.assertEqual(self.client.post(base + "/review", json={"action": "mark_redacted"}).status_code, 200)
+                self.assertEqual(self.client.get(base + "/redacted-export?format=docx").status_code, 409)
+                self.assertEqual(self.client.post(base + "/review", json={"action": "approve"}).status_code, 200)
+                with self.client.get(base + "/redacted-export?format=docx") as exported:
+                    self.assertEqual(exported.status_code, 200)
+                    with ZipFile(BytesIO(exported.data)) as archive:
+                        xml = ElementTree.fromstring(archive.read("word/document.xml"))
+                        exported_text = "".join(xml.itertext()).strip()
+                # The same three invariants, now on the delivered rendering. The
+                # canvas and the exported DOCX are the same resolved text, and
+                # in it each of the trigger, the address and the tail clause
+                # leaves the document under its OWN placeholder over its own
+                # exact span. The trigger under a CRITICAL context placeholder
+                # rather than swallowed into the HIGH `[ADDRESS_*]` one is the
+                # whole of PR #11's guarantee, stated where it is cashed.
+                delivered = self.canvas_segments(doc["id"])
+                self.assertEqual("".join(s["text"] for s in delivered), exported_text)
+                self.assertEqual(
+                    [(s["start"], s["end"], s["source_text"], s["text"]) for s in delivered
+                     if s["kind"] == "redacted"],
+                    [(0, len(trigger), trigger, leading[0]["replacement_text"]),
+                     (len(trigger) + 1, len(trigger) + 8, "Gül Sok", address[0]["replacement_text"]),
+                     (tail_start, len(text), text[tail_start:], tail[0]["replacement_text"])],
+                    delivered)
+                self.assertEqual([], [s["source_text"] for s in delivered
+                                      if s["kind"] != "text" and s["source_text"][:1] in ".,;: "], delivered)
+                # Everything was approved, so the post-decision rendering and the
+                # detection-time snapshot must now coincide as well.
+                self.assertEqual(exported_text, preview)
+                qa = self.client.get(base + "/redacted-export/qa?format=docx")
+                self.assertEqual(qa.status_code, 200)
+                self.assertEqual((qa.json["leakage_count"], qa.json["unapplied_target_count"]), (0, 0))
+
+                conn = sqlite3.connect(self.db_path)
+                try:
+                    metadata = " ".join(row[0] or "" for row in conn.execute(
+                        "SELECT metadata FROM audit_log WHERE document_id = ?", (doc["id"],)))
+                finally:
+                    conn.close()
+                for finding in doc["findings"]:
+                    self.assertNotIn(finding["sample"], metadata)
+                    self.assertNotIn(finding["replacement_text"], metadata)
 
     def test_upload_requires_reviewer_role(self):
         anonymous_client = app_module.app.test_client()
@@ -1382,7 +1538,12 @@ class AppWorkflowTests(unittest.TestCase):
         self.assertEqual(docx_page.status_code, 200)
         self.assertIn(b'id="docPaper"', docx_page.data)
         self.assertIn(b'id="docViewToggle"', docx_page.data)
-        self.assertIn(b"/api/document/${docId}/text", docx_page.data)
+        # The canvas draws the server-resolved plan; it does not fetch the raw
+        # text and derive a redacted rendering of its own any more. That
+        # derivation is what made the reviewed document differ from the
+        # delivered one -- see tests/test_redaction_parity.py.
+        self.assertIn(b"/api/document/${docId}/redaction-plan", docx_page.data)
+        self.assertNotIn(b"buildDocHtml(docText", docx_page.data)
 
         pdf_page = self.client.get("/studio/3")
         self.assertEqual(pdf_page.status_code, 200)

@@ -8,11 +8,17 @@ network egress in it; keep it that way unless a change is discussed first.
 
 ## Setup
 
+For a populated local evaluation with bundled OCR, use `./start.sh` after starting
+Docker. See the [README](README.md#try-it-locally) for persistence and reset behavior.
+For development without Docker, install the OCR system packages listed in the
+[manual setup](README.md#run-without-docker), then:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export LEGAL_ANALYZER_ADMIN_PASSWORD="change-this-local-password"
+export LEGAL_ANALYZER_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 python3 db/init_db.py
 python3 db/migrate.py
 python3 classify.py
@@ -27,7 +33,7 @@ Tests use `unittest`, not `pytest` (there is no `pytest` in `requirements.txt`).
 Run the full suite with:
 
 ```bash
-python -m unittest discover -s tests
+python -W error::ResourceWarning -m unittest discover -s tests -t .
 ```
 
 Running a single test file directly does **not** work:
