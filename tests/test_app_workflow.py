@@ -1179,7 +1179,7 @@ class AppWorkflowTests(unittest.TestCase):
         viewer_home = viewer_client.get("/")
         self.assertEqual(viewer_home.status_code, 200)
         self.assertIn(b"Redact AI", viewer_home.data)
-        self.assertIn(b"Review Queue", viewer_home.data)
+        self.assertIn(b"Matters", viewer_home.data)
         self.assertIn(b"Viewer role is read-only", viewer_home.data)
         self.assertNotIn(b"Upload & Analyze", viewer_home.data)
         self.assertNotIn(b"Audit Log", viewer_home.data)
@@ -1488,8 +1488,13 @@ class AppWorkflowTests(unittest.TestCase):
         self.assertIn(b'class="workspace-panel review-assistant"', page.data)
         self.assertIn(b'id="matterDocumentSearch"', page.data)
         self.assertIn(b'id="assistantCurrentFinding"', page.data)
-        self.assertIn(b'id="guidedModeButton"', page.data)
-        self.assertIn(b'id="bulkModeButton"', page.data)
+        # One review pane, no mode switcher. The three panes it replaced were
+        # all mounted at once and differed in capability, so choosing between
+        # them was a decision the reviewer should never have had to make.
+        self.assertIn(b'id="reviewPane"', page.data)
+        self.assertIn(b'id="reviewGroups"', page.data)
+        for retired in (b"guidedModeButton", b"groupModeButton", b"bulkModeButton", b"setReviewMode"):
+            self.assertNotIn(retired, page.data, retired.decode("utf-8"))
         self.assertEqual(page.data.count(b'class="panel-resizer"'), 2)
         self.assertIn(b'id="docPaper"', page.data)
         self.assertIn(b'id="exportGatePanel"', page.data)

@@ -32,6 +32,23 @@ A cautious legal-tech prototype (Flask + SQLite) for classifying Turkish/English
 - Use a warm off-white background, white surfaces, near-black text, and a restrained indigo accent.
 - Avoid generic SaaS dashboard patterns, glassmorphism, excessive gradients, giant KPI cards, robot imagery, magic-wand icons, and decorative AI effects.
 
+### The sidebar lists places; views are chips
+
+A nav item must be a destination. Three of them once pointed at `/?review_status=…`, `/?ocr_status=…`
+and `/?file_type=.docx` — the same dashboard with a querystring — and the sidebar went on
+highlighting "Dashboard" while you stood on one. Those are chips above the document table now.
+
+The dashboard still reads **every** `/api/documents` filter key off its own querystring
+(`initializeFiltersFromUrl` in `templates/index.html`), so all the old rail URLs remain valid
+bookmarks; a key with no chip renders as a named "Filtered by" pill rather than silently shortening
+the list. `tests/test_dashboard_navigation.py` pins both halves — no nav href contains `?`, and each
+retired URL still returns the right document ids. Do not add a nav entry with a querystring, and do
+not drop a filter key from that JS object.
+
+The chrome is still pasted into six templates with no `{% extends %}`, and `templates/studio.html` is
+the one that has not been brought into line (it still lists the retired queues and renders both
+*Studio* and *Settings* as "S"). Extract a base template when studio work next opens that file.
+
 ## Required working method
 
 Before changing code, inspect the relevant routes, templates, styles, JavaScript, tests, and data flow. Keep changes focused, preserve existing behavior unless a change is explicitly approved, run tests appropriate to the modified surface, and report exactly what changed.
@@ -123,6 +140,8 @@ benchmark proves nothing about extraction/classification/privacy timing. Point i
 **`db/`** — SQLite schema (`schema.sql`, used only for fresh init) + forward-only migrations (`migrations/*.sql`, tracked via `schema_migrations`). Key tables: `documents`, `clients`, `matters`, plus findings, audit_log, OCR pages/tokens, and PDF redaction regions (see schema for exact columns). `data/exports/document_<id>/` stores saved reviewed export artifacts, referenced by the artifact timeline.
 
 **`templates/`** + **`static/`** — server-rendered Jinja UI. `studio.html` is the large Redaction Studio workspace (PDF viewer + region drawing, finding review, OCR review). The in-browser PDF viewer is a vendored PDF.js build under `static/vendor/pdfjs/` — no CDN dependency.
+
+`studio.html` has ONE finding-review renderer, `renderReviewList()`, for every file format. There were four: `renderReviewGroups` / `renderBulkReviewTable` / the guided card were three complete panes mounted at once and merely `hidden` (82% of the page's DOM), and `renderReviewQueue()` replaced the list for PDFs and retitled the panel. They differed in *capability*, not layout — the default cost 29 clicks on a 29-finding document, By-type cost 14, and the bulk table could not finish at all because its only approve button covered LOW and MEDIUM. Do not add a second renderer, a mode switcher, or a format fork; `tests/test_review_pane.py` fails if any comes back. A PDF finding renders in the same row with its boxes attached — but **deciding a finding must not decide its boxes**: `pdf_export_blockers()` refuses on unreviewed boxes and that safeguard is the point of the separate step (pinned by `BoxReviewStaysItsOwnStepTests`).
 
 ### Safety gates (do not weaken without explicit instruction)
 

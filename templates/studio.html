@@ -519,20 +519,11 @@
         }
         .review-group.is-done { opacity: 0.72; }
         .review-group-head {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            gap: 10px;
-            flex-wrap: wrap;
+            display: grid;
+            gap: 2px;
         }
-        .review-group-title {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            font-size: 13px;
-        }
-        .review-group-status { font-size: 11.5px; }
+        .review-group-title { min-width: 0; font-size: 13px; }
+        .review-group-status { font-size: 11.5px; padding-left: 18px; }
         .review-group-actions {
             display: flex;
             gap: 8px;
@@ -540,42 +531,76 @@
             flex-wrap: wrap;
         }
         .review-group-actions button { min-height: 32px; font-size: 12px; }
-        .review-group-detail { margin-top: 8px; }
-        .review-group-detail summary {
-            cursor: pointer;
-            font-size: 11.5px;
-            color: var(--color-text-muted);
-        }
-        .review-group-list {
-            list-style: none;
-            margin: 8px 0 0;
-            padding: 0;
-            display: grid;
-            gap: 4px;
-            max-height: 240px;
-            overflow: auto;
-        }
-        .review-group-item {
+        /* A group opens in place. Only an open group renders its rows at
+           all -- collapsing used to mean three panes' worth of nodes sitting
+           in the document behind `hidden`. */
+        .review-group-toggle {
             display: flex;
-            justify-content: space-between;
             align-items: center;
             gap: 8px;
             width: 100%;
-            padding: 6px 8px;
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius-sm);
-            background: var(--color-surface-soft);
-            font-size: 12px;
+            min-height: 30px;
+            padding: 0;
+            border: 0;
+            background: none;
+            box-shadow: none;
+            font: inherit;
+            font-size: 13px;
             text-align: left;
             cursor: pointer;
         }
-        .review-group-item:hover { border-color: var(--color-accent); }
-        .review-group-sample {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+        .review-group-toggle strong {
             min-width: 0;
+            overflow-wrap: anywhere;
         }
+        .review-group-toggle:hover strong { text-decoration: underline; }
+        .review-group-caret {
+            flex: 0 0 auto;
+            width: 10px;
+            color: var(--color-text-muted);
+            font-size: 12px;
+            line-height: 1;
+        }
+        .review-group-boxes button { font-weight: 500; }
+        .review-group-items {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .review-row {
+            border: 1px solid var(--color-border);
+            border-radius: var(--radius-sm);
+            background: var(--color-surface-soft);
+            cursor: pointer;
+        }
+        .review-row.selected {
+            outline: 2px solid var(--color-accent);
+            outline-offset: -1px;
+            background: var(--color-accent-soft);
+        }
+        .review-row-boxes-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+        .review-row-boxes-actions button {
+            min-height: 30px;
+            padding: 0 10px;
+            font-size: 11.5px;
+        }
+        .review-pane-toolbar {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            padding: 12px 12px 0;
+        }
+        .review-pane-toolbar button {
+            min-height: 34px;
+            font-size: 12px;
+        }
+        /* The one action that could not be reached at all before. */
+        .review-pane-toolbar button[data-doc-action="approve"],
+        .review-pane-toolbar .subtle { grid-column: 1 / -1; }
         @keyframes skeletonPulse {
             0% { opacity: 0.55; }
             50% { opacity: 1; }
@@ -600,13 +625,6 @@
             list-style-position: outside;
         }
         .panel-summary h2 { display: inline; margin: 0; }
-        .queue-item { cursor: pointer; }
-        .queue-item.selected {
-            outline: 2px solid #2563eb;
-            outline-offset: -1px;
-            border-radius: 6px;
-            background: #eef4ff;
-        }
         .queue-boxes {
             font-size: 11.5px;
             color: #64748b;
@@ -653,18 +671,6 @@
             border: 1px solid var(--line);
             border-radius: 4px;
             padding: 0 4px;
-        }
-        .group-actions {
-            display: flex;
-            gap: 6px;
-            margin: 2px 0 8px;
-        }
-        .group-actions button {
-            flex: 1;
-            min-height: 28px;
-            padding: 0 10px;
-            font-size: 11.5px;
-            font-weight: 550;
         }
         .doc-view-controls {
             display: flex;
@@ -874,29 +880,6 @@
             border-bottom: 1px solid var(--line);
             padding: 14px;
         }
-        .finding-list {
-            display: grid;
-            gap: 8px;
-            padding: 12px;
-            max-height: calc(100vh - 179px);
-            overflow: auto;
-        }
-        .group {
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            overflow: hidden;
-            background: #fff;
-            box-shadow: var(--shadow);
-        }
-        .group-title {
-            display: flex;
-            justify-content: space-between;
-            gap: 8px;
-            align-items: center;
-            padding: 9px 10px;
-            background: #fbfcfe;
-            border-bottom: 1px solid var(--line);
-        }
         .finding {
             display: grid;
             gap: 7px;
@@ -1035,7 +1018,6 @@
                 height: calc(100vh - 210px);
             }
             .doc-view, #previewText, .pdf-review { max-height: calc(100vh - 300px); overflow: auto; }
-            .finding-list { max-height: none; }
             .pdf-toolbar, .manual-region-grid { grid-template-columns: 1fr 1fr; }
             /* Sidebar collapses to a slim top strip via workstation.css; keep studio chrome compact. */
             .shell-banner { display: none; }
@@ -1335,28 +1317,6 @@
             box-shadow: 0 16px 42px rgba(29, 29, 27, 0.13);
         }
         .workspace-center .pdf-review { background: #d9d6ce; }
-        .assistant-mode-switch {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 3px;
-            padding: 3px;
-            border-radius: var(--radius);
-            background: var(--color-surface-soft);
-        }
-        .assistant-mode-switch button {
-            min-height: 30px;
-            padding: 0 8px;
-            border-color: transparent;
-            background: transparent;
-            box-shadow: none;
-            color: var(--color-text-muted);
-            font-size: 11px;
-        }
-        .assistant-mode-switch button.active {
-            background: var(--color-surface);
-            color: var(--color-text);
-            box-shadow: var(--shadow);
-        }
         .assistant-summary {
             display: grid;
             gap: 8px;
@@ -1420,14 +1380,33 @@
             font-size: 10px;
             text-align: center;
         }
-        .assistant-queue-disclosure,
+        /* The decision comes before the paperwork: replacement text and the
+           reviewer note sit behind this, not above the buttons. */
+        .assistant-edit {
+            border-top: 1px solid var(--color-border);
+            padding-top: var(--space-2);
+        }
+        .assistant-edit > summary {
+            cursor: pointer;
+            color: var(--color-text-muted);
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        .assistant-edit .assistant-fields { margin-top: 8px; }
+        #reviewPane {
+            display: grid;
+            gap: 0;
+            align-content: start;
+        }
+        #reviewGroups { padding: 0 12px 12px; }
+        #reviewPane .group-intro { padding: 12px 12px 8px; margin: 0; }
+        #reviewPane .studio-truncation-banner { margin: 12px 12px 0; }
         .assistant-technical {
             margin: 0 12px 12px;
             border: 1px solid var(--color-border);
             border-radius: var(--radius);
             background: var(--color-surface);
         }
-        .assistant-queue-disclosure > summary,
         .assistant-technical > summary {
             padding: 9px 10px;
             cursor: pointer;
@@ -1435,7 +1414,6 @@
             font-size: 11.5px;
             font-weight: 600;
         }
-        .assistant-queue-disclosure .finding-list { max-height: 320px; }
         .assistant-technical-content { border-top: 1px solid var(--color-border); }
         .assistant-technical-content .panel-pad {
             margin: 0;
@@ -1444,25 +1422,6 @@
             border-radius: 0;
             box-shadow: none;
         }
-        .bulk-pane { padding: 12px; }
-        .bulk-toolbar {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 7px;
-            margin-bottom: 10px;
-        }
-        .bulk-table-wrap {
-            max-height: calc(100vh - 330px);
-            overflow: auto;
-            border: 1px solid var(--color-border);
-            border-radius: var(--radius);
-        }
-        .bulk-review-table { width: 100%; min-width: 620px; table-layout: auto; }
-        .bulk-review-table th,
-        .bulk-review-table td { padding: 8px; font-size: 11px; vertical-align: top; }
-        .bulk-review-table th { position: sticky; top: 0; z-index: 1; background: var(--color-surface-soft); }
-        .bulk-review-table tr.selected { background: var(--color-accent-soft); }
-        .bulk-review-table button { min-height: 28px; padding: 0 8px; font-size: 10px; }
         .studio-empty,
         .studio-failure {
             margin: 12px;
@@ -1544,7 +1503,6 @@
             .workspace.right-collapsed .review-assistant .assistant-content { display: block; }
             .collapsed-panel-label,
             .panel-icon-button { display: none !important; }
-            .bulk-table-wrap { max-height: calc(100vh - 260px); }
         }
     </style>
 </head>
@@ -1778,7 +1736,7 @@
         <aside class="workspace-panel review-assistant" data-col="findings" aria-label="Contextual review assistant">
             <div class="workspace-panel-head">
                 <div class="panel-heading-copy">
-                    <h2 id="findingsTitle">Review assistant</h2>
+                    <h2 id="findingsTitle">Findings</h2>
                     <div id="findingSummary" class="subtle"></div>
                 </div>
                 <button id="rightPanelToggle" class="panel-icon-button" type="button" aria-label="Collapse review assistant" aria-expanded="true" onclick="toggleWorkspacePanel('right')">→</button>
@@ -1792,28 +1750,19 @@
                     </div>
                     <div id="assistantNextAction" class="assistant-next-action" role="status">Loading recommended next action…</div>
                     <div id="languageCoverageNotice" class="coverage-notice" role="note" hidden></div>
-                    <div class="assistant-mode-switch" role="group" aria-label="Review mode">
-                        <button id="guidedModeButton" class="active" type="button" aria-pressed="true" onclick="setReviewMode('guided')">Guided review</button>
-                        <button id="groupModeButton" type="button" aria-pressed="false" onclick="setReviewMode('groups')">By type</button>
-                        <button id="bulkModeButton" type="button" aria-pressed="false" onclick="setReviewMode('bulk')">Bulk table</button>
-                    </div>
                 </div>
 
-                <div id="groupReviewPane" class="assistant-pane" hidden>
-                    <p class="group-intro subtle">
-                        Findings of the same kind usually get the same decision. Review a whole
-                        type at once, or open one to handle its findings individually.
-                    </p>
-                    <div id="groupsTruncationBanner" class="studio-truncation-banner" hidden></div>
-                    <div id="reviewGroups" class="review-groups"></div>
-                </div>
-
-                <div id="guidedReviewPane" class="assistant-pane">
+                <div id="reviewPane" class="assistant-pane">
                     <div id="assistantCurrentFinding" class="assistant-card" tabindex="-1"></div>
-                    <details class="assistant-queue-disclosure">
-                        <summary>All findings and PDF boxes</summary>
-                        <div id="findingGroups" class="finding-list"></div>
-                    </details>
+                    {% if can_review %}
+                    <div id="reviewPaneToolbar" class="review-pane-toolbar" role="group" aria-label="Decide every pending finding"></div>
+                    {% endif %}
+                    <div id="reviewTruncationBanner" class="studio-truncation-banner" hidden></div>
+                    <p class="group-intro subtle">
+                        Findings of the same kind usually take the same decision. Decide a whole
+                        type from its header, or expand it to handle findings one at a time.
+                    </p>
+                    <div id="reviewGroups" class="review-groups"></div>
                     {% if can_review %}
                     <form class="manual-form" onsubmit="addFinding(event)">
                         <h2>Add missed text</h2>
@@ -1822,26 +1771,9 @@
                         <input id="manualReplacement" placeholder="[MANUAL_SENSITIVE_TEXT_REDACTED]">
                         <button class="primary" type="submit">Add finding</button>
                     </form>
-                    {% endif %}
-                </div>
-
-                <div id="bulkReviewPane" class="assistant-pane bulk-pane" hidden>
-                    {% if can_review %}
-                    <div class="bulk-toolbar">
-                        <button class="approve" type="button" onclick="batchReview('approve', ['LOW', 'MEDIUM'])">Approve pending low/medium</button>
-                        <button type="button" onclick="batchReview('dismiss', [])">Mark all pending not sensitive</button>
-                        <button class="danger retain-action" type="button" onclick="batchReview('retain', [])">Keep all pending unredacted</button>
-                    </div>
                     {% else %}
-                    <div class="role-readonly">Bulk review controls are unavailable to viewer role.</div>
+                    <div class="role-readonly">Viewer role can read findings and gate reasons. Review, OCR, QA, and export actions require reviewer or admin role.</div>
                     {% endif %}
-                    <div id="bulkTruncationBanner" class="studio-truncation-banner" hidden></div>
-                    <div class="bulk-table-wrap">
-                        <table class="bulk-review-table">
-                            <thead><tr><th>Finding</th><th>Risk</th><th>Status</th><th>Replacement</th><th>Action</th></tr></thead>
-                            <tbody id="bulkReviewRows"><tr><td colspan="5">Loading findings…</td></tr></tbody>
-                        </table>
-                    </div>
                 </div>
 
                 <details id="exportReadinessDetails" class="assistant-technical">
@@ -1911,7 +1843,10 @@
         let selectedFindingId = null;
         let docViewMode = 'document';
         let docRedactionStyle = 'placeholder';
-        let reviewMode = 'guided';
+        // Which category groups are open. Only an open group renders its
+        // finding rows at all, which is the difference between one pane and
+        // three panes that were merely `hidden`.
+        const expandedReviewGroups = new Set();
         let matterDocuments = [];
         let matterContextLoadedFor = null;
 
@@ -1938,32 +1873,80 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             initializePanelResizers();
-            initializeBulkReviewDelegatedListeners();
+            initializeReviewPaneListeners();
             reloadDocument();
         });
 
-        // Bulk-review buttons carry their target (category / finding ids) in
-        // data-* attributes rather than in an inline onclick string. Free-text
-        // categories only ever need HTML-attribute escaping this way — they
-        // are never concatenated into a JS string literal, which is what let
-        // a category like `x'),alert(1),('` execute previously.
-        function initializeBulkReviewDelegatedListeners() {
-            document.getElementById('reviewGroups')?.addEventListener('click', (event) => {
-                const button = event.target.closest('button[data-bulk-action]');
-                if (!button) return;
+        // Every control in the review pane carries its target (category,
+        // finding id, region ids) in data-* attributes rather than in an inline
+        // onclick string. Free-text categories only ever need HTML-attribute
+        // escaping this way — they are never concatenated into a JS string
+        // literal, which is what let a category like `x'),alert(1),('` execute
+        // previously.
+        function initializeReviewPaneListeners() {
+            const pane = document.getElementById('reviewPane');
+            if (!pane) return;
+            pane.addEventListener('click', (event) => {
                 const findings = (currentDoc && currentDoc.findings) || [];
-                const group = buildReviewGroups(findings).find((g) => g.category === button.dataset.category);
-                if (group) batchReviewCategory(group, button.dataset.bulkAction);
+
+                const toggle = event.target.closest('button[data-toggle-category]');
+                if (toggle) {
+                    const category = toggle.dataset.toggleCategory;
+                    if (expandedReviewGroups.has(category)) expandedReviewGroups.delete(category);
+                    else expandedReviewGroups.add(category);
+                    renderReviewList();
+                    return;
+                }
+
+                const docButton = event.target.closest('button[data-doc-action]');
+                if (docButton) {
+                    batchReview(docButton.dataset.docAction, []);
+                    return;
+                }
+
+                const bulk = event.target.closest('button[data-bulk-action]');
+                if (bulk) {
+                    const group = buildReviewGroups(findings).find((g) => g.category === bulk.dataset.category);
+                    if (group) batchReviewGroup(group, bulk.dataset.bulkAction);
+                    return;
+                }
+
+                const box = event.target.closest('button[data-box-action]');
+                if (box) {
+                    reviewBoxes(parseIdList(box.dataset.regionIds), box.dataset.boxAction);
+                    return;
+                }
+
+                const row = event.target.closest('button[data-row-action]');
+                if (row) {
+                    const findingId = Number(row.dataset.findingId);
+                    if (row.dataset.rowAction === 'edit') {
+                        selectFinding(findingId, false);
+                        openSelectedFindingEditor();
+                    } else if (row.dataset.rowAction === 'undo') {
+                        undoFinding(findingId);
+                    } else {
+                        findingAction(findingId, row.dataset.rowAction);
+                    }
+                    return;
+                }
+
+                const regionRow = event.target.closest('[data-select-region]');
+                if (regionRow) {
+                    selectPdfRegion(Number(regionRow.dataset.selectRegion), true);
+                    return;
+                }
+
+                const findingRow = event.target.closest('[data-select-finding]');
+                if (findingRow) selectFinding(Number(findingRow.dataset.selectFinding), false);
             });
-            document.getElementById('findingGroups')?.addEventListener('click', (event) => {
-                const button = event.target.closest('button[data-bulk-action]');
-                if (!button) return;
-                const findingIds = (button.dataset.findingIds || '')
-                    .split(',')
-                    .map(Number)
-                    .filter((n) => Number.isInteger(n) && n > 0);
-                groupBulkAction(button.dataset.bulkAction, findingIds, button.dataset.groupLabel || '');
-            });
+        }
+
+        function parseIdList(value) {
+            return String(value || '')
+                .split(',')
+                .map(Number)
+                .filter((n) => Number.isInteger(n) && n > 0);
         }
 
         async function reloadDocument() {
@@ -2108,9 +2091,8 @@
             renderLanguageCoverageNotice(doc);
             renderAssistant(doc);
             renderFindingTruncationBanners(doc, findings);
-            renderBulkReviewTable(findings);
+            renderReviewList();
             loadMatterContext(doc);
-            document.getElementById('findingsTitle').textContent = isPdf ? 'Review Queue' : 'Findings';
             if (isPdf) {
                 const boxes = doc.pdf_region_summary || {};
                 document.getElementById('findingSummary').textContent =
@@ -2130,11 +2112,9 @@
                         callout.innerHTML = '';
                     }
                 }
-                renderReviewQueue();
                 renderPdfPreview();
                 loadPdfRegions();
             } else {
-                renderFindingGroups(findings);
                 renderDocView();
             }
         }
@@ -2256,17 +2236,20 @@
                 <div class="assistant-card-title">${escapeHtml(info.label)}</div>
                 <div class="finding-sample">${escapeHtml(finding.sample || 'No sample available')}</div>
                 <div class="assistant-explanation"><strong>Why it was flagged:</strong> ${escapeHtml(info.basis)}<br><strong>Why it matters:</strong> ${escapeHtml(info.concern)}</div>
-                <div class="assistant-fields">
-                    <div class="assistant-field"><label for="assistantReplacement">Replacement on approved export</label><input id="assistantReplacement" value="${escapeHtml(finding.replacement_text || finding.placeholder || '[REDACTED]')}" ${canReview ? '' : 'disabled'}></div>
-                    <div class="assistant-field"><label for="assistantReviewerNote">Reviewer note</label><textarea id="assistantReviewerNote" ${canReview ? '' : 'disabled'}>${escapeHtml(finding.reviewer_note || '')}</textarea></div>
-                </div>
                 ${canReview ? `
                     <div class="assistant-actions">
                         <button class="approve" type="button" onclick="reviewAssistantAction('approve')">Approve finding</button>
                         <button type="button" onclick="reviewAssistantAction('dismiss')">Not sensitive</button>
                         <button class="danger retain-action" type="button" style="grid-column:1 / -1" onclick="reviewAssistantAction('retain')">Keep unredacted — identifier stays in the export</button>
-                        <button type="button" style="grid-column:1 / -1" onclick="updateCurrentFinding()">Save edit</button>
                     </div>` : '<div class="role-readonly">Viewer role can inspect this finding but cannot change it.</div>'}
+                <details class="assistant-edit" id="assistantEditDetails">
+                    <summary>Edit replacement and reviewer note</summary>
+                    <div class="assistant-fields">
+                        <div class="assistant-field"><label for="assistantReplacement">Replacement on approved export</label><input id="assistantReplacement" value="${escapeHtml(finding.replacement_text || finding.placeholder || '[REDACTED]')}" ${canReview ? '' : 'disabled'}></div>
+                        <div class="assistant-field"><label for="assistantReviewerNote">Reviewer note</label><textarea id="assistantReviewerNote" ${canReview ? '' : 'disabled'}>${escapeHtml(finding.reviewer_note || '')}</textarea></div>
+                        ${canReview ? '<button type="button" onclick="updateCurrentFinding()">Save edit</button>' : ''}
+                    </div>
+                </details>
                 <details class="finding-why">
                     <summary>Technical details</summary>
                     <dl class="why-grid">
@@ -2276,7 +2259,7 @@
                         <dt>Verification</dt><dd>${escapeHtml(verificationStatusLabel(evidence.verification_status))}</dd>
                     </dl>
                 </details>
-                <div class="assistant-shortcuts">A approve · R not sensitive · E edit · J/K previous/next · keeping an identifier unredacted has no shortcut on purpose</div>
+                <div class="assistant-shortcuts">A approve · R not sensitive · E edit replacement · J/K previous/next · keeping an identifier unredacted has no shortcut on purpose</div>
             `;
         }
 
@@ -2407,66 +2390,273 @@
             const message = total > shown
                 ? `Showing ${shown} of ${total} findings — review in batches or narrow the filter.`
                 : '';
-            [
-                document.getElementById('groupsTruncationBanner'),
-                document.getElementById('bulkTruncationBanner'),
-            ].forEach((banner) => {
-                if (!banner) return;
-                banner.hidden = !message;
-                banner.textContent = message;
-            });
+            const banner = document.getElementById('reviewTruncationBanner');
+            if (!banner) return;
+            banner.hidden = !message;
+            banner.textContent = message;
         }
 
-        function renderReviewGroups() {
+        // ONE review pane, for every file format.
+        //
+        // It replaced four renderers of the same findings. Three were mounted
+        // at once and merely `hidden` -- a guided card walking one finding at a
+        // time, a by-type list carrying the bulk decisions on its headers, and
+        // a bulk table. They differed in *capability*, not just layout, so
+        // choosing between them was a real decision a reviewer should never
+        // have had to make: on a 29-finding document the default cost 29
+        // clicks, By-type cost 14, and the bulk table could not finish at all,
+        // because its only approve button covered LOW and MEDIUM (8 of 29).
+        // The fourth, renderReviewQueue(), wrote to the same element for PDFs
+        // and retitled the panel "Review Queue", so the reviewer's mental model
+        // of the main workspace changed with the file format.
+        //
+        // A PDF finding is a finding that has coordinate boxes attached. It
+        // renders here too, with its boxes on the row.
+        //
+        // What did NOT merge: the box decision. Approving a finding does not
+        // approve its boxes. pdf_export_blockers() still requires every box to
+        // be reviewed, and deciding an identifier as a finding is not evidence
+        // that the boxes drawn for it cover the right pixels.
+        function renderReviewList() {
             const target = document.getElementById('reviewGroups');
             if (!target) return;
+            renderReviewPaneToolbar();
             const findings = (currentDoc && currentDoc.findings) || [];
-            if (!findings.length) {
-                target.innerHTML = '<div class="studio-empty">No findings to review.</div>';
+            const isPdf = Boolean(currentDoc && currentDoc.file_extension === '.pdf');
+            const standalone = isPdf ? pdfRegions.filter((region) => !region.finding_id) : [];
+            if (!findings.length && !standalone.length) {
+                target.innerHTML = isPdf
+                    ? '<div class="studio-empty">No findings or redaction boxes yet. Generate suggested boxes from the detected findings, or draw one on the page.</div>'
+                    : '<div class="studio-empty">No automated findings. That is not a guarantee of de-identification — read the document before export.</div>';
                 return;
             }
-            target.innerHTML = buildReviewGroups(findings).map((group) => {
-                // A group with zero pending but nonzero unknown-status members
-                // is NOT fully reviewed — an unrecognized status must not be
-                // able to hide the Approve all / Reject all controls (Task 5).
-                const done = group.pending === 0 && group.unknownStatus === 0;
-                const controls = (canReview && group.pending)
-                    ? `<div class="review-group-actions">
-                           <button class="approve" type="button" data-bulk-action="approve" data-category="${escapeAttr(group.category)}">Approve all ${group.pending}</button>
-                           <button type="button" data-bulk-action="dismiss" data-category="${escapeAttr(group.category)}">Not sensitive — all ${group.pending}</button>
-                           <button class="danger retain-action" type="button" data-bulk-action="retain" data-category="${escapeAttr(group.category)}">Keep all ${group.pending} unredacted</button>
-                       </div>`
-                    : '';
-                const rows = group.items.map((finding) => `
-                    <li>
-                        <button type="button" class="review-group-item" onclick="selectFinding(${Number(finding.id)}, false); setReviewMode('guided')">
-                            <span class="review-group-sample">${escapeHtml(finding.sample || '-')}</span>
-                            <span class="badge status-${escapeHtml(finding.review_status || 'pending')}">${escapeHtml(finding.review_status || 'pending')}</span>
-                        </button>
-                    </li>`).join('');
-                const statusParts = [];
-                if (!done) statusParts.push(`${group.pending} pending`);
-                else statusParts.push('All reviewed');
-                if (group.dismissed) statusParts.push(`${group.dismissed} not sensitive`);
-                if (group.retained) statusParts.push(`${group.retained} kept unredacted`);
-                if (group.unknownStatus) statusParts.push(`${group.unknownStatus} unknown status`);
-                return `
-                    <section class="review-group ${done ? 'is-done' : ''}">
-                        <header class="review-group-head">
-                            <div class="review-group-title">
+            const sections = buildReviewGroups(findings).map((group) => reviewGroupHtml(group, isPdf));
+            if (standalone.length) sections.push(manualBoxGroupHtml(standalone));
+            target.innerHTML = sections.join('');
+        }
+
+        // The API has always accepted a whole-document batch: review-batch with
+        // no risk filter decides every pending finding in one call. The bulk
+        // table surfaced it for "not sensitive" and "keep unredacted" but capped
+        // approve at LOW and MEDIUM, so a document of HIGH and CRITICAL findings
+        // had no finish button anywhere in the interface. Same endpoint, no risk
+        // filter, so all of them are now reachable.
+        function renderReviewPaneToolbar() {
+            const target = document.getElementById('reviewPaneToolbar');
+            if (!target) return;
+            const findings = (currentDoc && currentDoc.findings) || [];
+            const pending = findings.filter((finding) => (finding.review_status || 'pending') === 'pending').length;
+            if (!pending) {
+                target.innerHTML = '<div class="subtle">Every flagged item has a decision. Undo any one of them from its row.</div>';
+                return;
+            }
+            target.innerHTML = `
+                <button class="approve" type="button" data-doc-action="approve">Approve all ${pending} pending</button>
+                <button type="button" data-doc-action="dismiss">Not sensitive — all ${pending}</button>
+                <button class="danger retain-action" type="button" data-doc-action="retain">Keep all ${pending} unredacted</button>
+            `;
+        }
+
+        function regionsForFinding(findingId) {
+            return pdfRegions.filter((region) => region.finding_id === findingId);
+        }
+
+        function pendingRegionsFor(findings) {
+            const ids = new Set(findings.map((finding) => finding.id));
+            return pdfRegions.filter((region) => ids.has(region.finding_id)
+                && (region.review_status || 'pending') === 'pending');
+        }
+
+        function reviewGroupHtml(group, isPdf) {
+            // A group opens when the reviewer opened it, or when the finding
+            // selected on the page/canvas lives inside it -- otherwise clicking
+            // a highlight would select a row that is not on screen.
+            const expanded = expandedReviewGroups.has(group.category)
+                || group.items.some((finding) => finding.id === selectedFindingId);
+            const pendingBoxes = isPdf ? pendingRegionsFor(group.items) : [];
+            // A group with zero pending but nonzero unknown-status members is
+            // NOT fully reviewed -- an unrecognized status must not be able to
+            // hide the bulk controls. Nor is a group whose boxes are still
+            // pending: that step is separate and has to stay visible.
+            const done = group.pending === 0 && group.unknownStatus === 0 && !pendingBoxes.length;
+            const controls = (canReview && group.pending)
+                ? `<div class="review-group-actions">
+                       <button class="approve" type="button" data-bulk-action="approve" data-category="${escapeAttr(group.category)}">Approve all ${group.pending}</button>
+                       <button type="button" data-bulk-action="dismiss" data-category="${escapeAttr(group.category)}">Not sensitive — all ${group.pending}</button>
+                       <button class="danger retain-action" type="button" data-bulk-action="retain" data-category="${escapeAttr(group.category)}">Keep all ${group.pending} unredacted</button>
+                   </div>`
+                : '';
+            const boxControls = (canReview && pendingBoxes.length)
+                ? `<div class="review-group-actions review-group-boxes">
+                       <button type="button" data-box-action="approve" data-region-ids="${escapeAttr(pendingBoxes.map((region) => region.id).join(','))}">Approve ${pendingBoxes.length} pending box${pendingBoxes.length === 1 ? '' : 'es'}</button>
+                       <button class="danger" type="button" data-box-action="reject" data-region-ids="${escapeAttr(pendingBoxes.map((region) => region.id).join(','))}">Reject ${pendingBoxes.length} pending box${pendingBoxes.length === 1 ? '' : 'es'}</button>
+                   </div>`
+                : '';
+            const statusParts = [`${group.items.length} finding${group.items.length === 1 ? '' : 's'}`];
+            statusParts.push(group.pending ? `${group.pending} to decide` : 'all decided');
+            if (group.dismissed) statusParts.push(`${group.dismissed} not sensitive`);
+            if (group.retained) statusParts.push(`${group.retained} kept unredacted`);
+            if (group.unknownStatus) statusParts.push(`${group.unknownStatus} unknown status`);
+            if (pendingBoxes.length) statusParts.push(`${pendingBoxes.length} box${pendingBoxes.length === 1 ? '' : 'es'} to review`);
+            const rows = expanded
+                ? `<div class="review-group-items">${group.items.map((finding) => reviewRowHtml(finding, isPdf)).join('')}</div>`
+                : '';
+            return `
+                <section class="review-group ${done ? 'is-done' : ''}">
+                    <header class="review-group-head">
+                        <div class="review-group-title">
+                            <button class="review-group-toggle" type="button" data-toggle-category="${escapeAttr(group.category)}" aria-expanded="${expanded ? 'true' : 'false'}">
+                                <span class="review-group-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
                                 <span class="badge risk-${escapeHtml(group.risk)}">${escapeHtml(group.risk)}</span>
                                 <strong>${escapeHtml(categoryLabel(group.category))}</strong>
-                                <span class="subtle">${group.items.length} finding${group.items.length === 1 ? '' : 's'}</span>
-                            </div>
-                            <div class="review-group-status subtle">${statusParts.join(' · ')}</div>
-                        </header>
-                        ${controls}
-                        <details class="review-group-detail">
-                            <summary>Show findings</summary>
-                            <ul class="review-group-list">${rows}</ul>
-                        </details>
-                    </section>`;
-            }).join('');
+                            </button>
+                        </div>
+                        <div class="review-group-status subtle">${escapeHtml(statusParts.join(' · '))}</div>
+                    </header>
+                    ${controls}
+                    ${boxControls}
+                    ${rows}
+                </section>`;
+        }
+
+        // A PDF finding's boxes ride on its row: the reviewer sees how many
+        // there are, where they are, and can decide them here -- but as their
+        // own decision, never as a side effect of deciding the finding.
+        function reviewRowBoxesHtml(finding) {
+            const regions = regionsForFinding(finding.id);
+            if (!regions.length) {
+                return '<div class="queue-boxes">No redaction box on the page yet — draw one, or use “Generate suggested boxes”.</div>';
+            }
+            const pending = regions.filter((region) => (region.review_status || 'pending') === 'pending');
+            const pages = [...new Set(regions.map((region) => region.page_number))].join(', ');
+            const note = `${regions.length} box${regions.length === 1 ? '' : 'es'} on page ${pages}`
+                + (pending.length ? ` · ${pending.length} still to review` : ' · all reviewed')
+                + ' — select this row to locate them on the page';
+            const controls = (canReview && pending.length)
+                ? `<div class="review-row-boxes-actions">
+                       <button type="button" data-box-action="approve" data-region-ids="${escapeAttr(pending.map((region) => region.id).join(','))}">Approve box${pending.length === 1 ? '' : 'es'}</button>
+                       <button class="danger" type="button" data-box-action="reject" data-region-ids="${escapeAttr(pending.map((region) => region.id).join(','))}">Reject box${pending.length === 1 ? '' : 'es'}</button>
+                   </div>`
+                : '';
+            return `<div class="queue-boxes">${escapeHtml(note)}</div>${controls}`;
+        }
+
+        // All four decisions are reachable from every row, and undo is the
+        // first control on a row that already carries one -- it is the safety
+        // net for a bulk decision the reviewer wants back, and it was only ever
+        // offered on a toast that disappears.
+        const ROW_DECISIONS = [
+            { action: 'approve', label: 'Approve', cls: 'approve' },
+            { action: 'dismiss', label: 'Not sensitive', cls: '' },
+            { action: 'retain', label: 'Keep unredacted', cls: 'danger retain-action' },
+        ];
+
+        function reviewRowActionsHtml(finding) {
+            if (!canReview) return '';
+            const status = finding.review_status || 'pending';
+            const decided = status !== 'pending';
+            const buttons = [];
+            if (decided) {
+                buttons.push(`<button type="button" data-row-action="undo" data-finding-id="${Number(finding.id)}">Undo decision</button>`);
+            }
+            ROW_DECISIONS.forEach((decision) => {
+                // Don't offer the decision this finding already carries.
+                if (decided && findingCarriesDecision(status, decision.action)) return;
+                buttons.push(`<button ${decision.cls ? `class="${decision.cls}" ` : ''}type="button" data-row-action="${decision.action}" data-finding-id="${Number(finding.id)}">${decision.label}</button>`);
+            });
+            buttons.push(`<button type="button" data-row-action="edit" data-finding-id="${Number(finding.id)}">Edit replacement</button>`);
+            return `<div class="finding-actions">${buttons.join('')}</div>`;
+        }
+
+        // 'added_by_reviewer' is a finding a reviewer typed in; it is redacted
+        // like an approved one, so "Approve" is the decision it already holds.
+        function findingCarriesDecision(status, action) {
+            if (action === 'approve') return RESOLVED_STATUSES.has(status);
+            if (action === 'dismiss') return status === 'dismissed';
+            if (action === 'retain') return status === 'retained';
+            return false;
+        }
+
+        function reviewRowHtml(finding, isPdf) {
+            const evidence = finding.evidence || {};
+            const selectedCls = finding.id === selectedFindingId ? ' selected' : '';
+            const actions = reviewRowActionsHtml(finding);
+            return `
+                <div class="finding review-row${selectedCls}" data-finding-id="${Number(finding.id)}" data-select-finding="${Number(finding.id)}">
+                    <div class="finding-meta">
+                        <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
+                        <span class="badge status-${escapeHtml(finding.review_status || 'pending')}">${escapeHtml(finding.review_status || 'pending')}</span>
+                        <span class="badge">${escapeHtml(finding.source || 'detector')}</span>
+                    </div>
+                    <div class="finding-sample">${escapeHtml(finding.sample || '-')}</div>
+                    ${evidenceAnchorHtml(evidence)}
+                    <div class="subtle">${escapeHtml(verificationStatusLabel(evidence.verification_status))}</div>
+                    <div class="subtle">On export: ${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</div>
+                    ${isPdf ? reviewRowBoxesHtml(finding) : ''}
+                    ${findingRationaleHtml(finding)}
+                    ${actions}
+                </div>`;
+        }
+
+        // Boxes a reviewer drew for text the detector missed have no finding
+        // behind them, so they get their own group rather than disappearing.
+        function manualBoxGroupHtml(regions) {
+            const pending = regions.filter((region) => (region.review_status || 'pending') === 'pending');
+            const controls = (canReview && pending.length)
+                ? `<div class="review-group-actions review-group-boxes">
+                       <button type="button" data-box-action="approve" data-region-ids="${escapeAttr(pending.map((region) => region.id).join(','))}">Approve ${pending.length} pending box${pending.length === 1 ? '' : 'es'}</button>
+                       <button class="danger" type="button" data-box-action="reject" data-region-ids="${escapeAttr(pending.map((region) => region.id).join(','))}">Reject ${pending.length} pending box${pending.length === 1 ? '' : 'es'}</button>
+                   </div>`
+                : '';
+            const expanded = expandedReviewGroups.has('__manual_boxes__');
+            const rows = expanded
+                ? `<div class="review-group-items">${regions.map(manualBoxRowHtml).join('')}</div>`
+                : '';
+            return `
+                <section class="review-group ${pending.length ? '' : 'is-done'}">
+                    <header class="review-group-head">
+                        <div class="review-group-title">
+                            <button class="review-group-toggle" type="button" data-toggle-category="__manual_boxes__" aria-expanded="${expanded ? 'true' : 'false'}">
+                                <span class="review-group-caret" aria-hidden="true">${expanded ? '&#9662;' : '&#9656;'}</span>
+                                <span class="badge">BOXES</span>
+                                <strong>Boxes drawn by a reviewer</strong>
+                            </button>
+                        </div>
+                        <div class="review-group-status subtle">${regions.length} box${regions.length === 1 ? '' : 'es'} · ${pending.length ? `${pending.length} to review` : 'all reviewed'}</div>
+                    </header>
+                    ${controls}
+                    ${rows}
+                </section>`;
+        }
+
+        function manualBoxRowHtml(region) {
+            const status = region.review_status || 'pending';
+            const controls = (canReview && status === 'pending')
+                ? `<div class="review-row-boxes-actions">
+                       <button type="button" data-box-action="approve" data-region-ids="${Number(region.id)}">Approve box</button>
+                       <button class="danger" type="button" data-box-action="reject" data-region-ids="${Number(region.id)}">Reject box</button>
+                   </div>`
+                : '';
+            return `
+                <div class="finding review-row${region.id === pdfSelectedRegionId ? ' selected' : ''}" data-select-region="${Number(region.id)}">
+                    <div class="finding-meta">
+                        <span class="badge">${escapeHtml(region.category || 'manual_sensitive_text')}</span>
+                        <span class="badge status-${escapeHtml(status)}">${escapeHtml(status)}</span>
+                        <span class="badge">${escapeHtml(region.source || 'manual')}</span>
+                    </div>
+                    <div class="finding-sample">Redaction box #${Number(region.id)} on page ${Number(region.page_number)}</div>
+                    ${region.reviewer_note ? `<div class="queue-boxes">Note: ${escapeHtml(region.reviewer_note)}</div>` : ''}
+                    <div class="queue-boxes">Drawn by a reviewer — no detected finding behind it. Select this row to locate it.</div>
+                    ${controls}
+                </div>`;
+        }
+
+        function highlightReviewRow() {
+            const selector = pdfSelectedRegionId
+                ? `.review-row[data-select-region="${pdfSelectedRegionId}"], .review-row[data-finding-id="${selectedFindingId}"]`
+                : `.review-row[data-finding-id="${selectedFindingId}"]`;
+            const row = document.querySelector(selector);
+            if (row) row.scrollIntoView({ block: 'nearest' });
         }
 
         // Takes the rendered group object itself (not a bare category string)
@@ -2475,7 +2665,7 @@
         // category match that can silently reach findings outside the
         // rendered (possibly truncated) list. See the truncation banner in
         // renderFindingTruncationBanners for the case where the list is cut.
-        async function batchReviewCategory(group, action) {
+        async function batchReviewGroup(group, action) {
             if (!canReview || !group) return;
             const label = categoryLabel(group.category).toLowerCase();
             const pendingIds = group.items
@@ -2491,42 +2681,18 @@
             await handleMutation(response, (data) => `${categoryLabel(group.category)} ${findingActionPastTense(action)} (${data.updated ?? pendingIds.length}).`);
         }
 
-        function renderBulkReviewTable(findings) {
-            const target = document.getElementById('bulkReviewRows');
-            if (!target) return;
-            if (!findings.length) {
-                target.innerHTML = '<tr><td colspan="5"><div class="studio-empty">No findings to review.</div></td></tr>';
-                return;
-            }
-            target.innerHTML = docFindingOrder().map((finding) => `
-                <tr class="${finding.id === selectedFindingId ? 'selected' : ''}">
-                    <td><button type="button" onclick="selectFinding(${finding.id}, false); setReviewMode('guided')">${escapeHtml(finding.sample || finding.category || '-')}</button><div class="subtle">#${Number(finding.id)} · ${escapeHtml(finding.category || '-')}</div></td>
-                    <td><span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span></td>
-                    <td>${escapeHtml(finding.review_status || 'pending')}</td>
-                    <td>${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</td>
-                    <td>${canReview ? `<button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('approve')">Approve</button> <button type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('dismiss')">Not sensitive</button> <button class="danger retain-action" type="button" onclick="selectFinding(${finding.id}, false); reviewAssistantAction('retain')">Keep unredacted</button>` : 'Read only'}</td>
-                </tr>
-            `).join('');
-            // Both views read the same findings; refresh together so switching
-            // modes never shows a stale count.
-            renderReviewGroups();
+        // The box half of the pane. Separate call, separate confirmation, so a
+        // finding decision can never carry a box decision with it.
+        async function reviewBoxes(regionIds, action) {
+            if (!canReview || !regionIds.length) return;
+            await pdfBatchReview({ action, region_ids: regionIds, only_pending: true });
         }
 
-        function setReviewMode(mode) {
-            reviewMode = ['bulk', 'groups'].includes(mode) ? mode : 'guided';
-            const panes = { guided: 'guidedReviewPane', groups: 'groupReviewPane', bulk: 'bulkReviewPane' };
-            const buttons = { guided: 'guidedModeButton', groups: 'groupModeButton', bulk: 'bulkModeButton' };
-            Object.entries(panes).forEach(([name, id]) => {
-                const pane = document.getElementById(id);
-                if (pane) pane.hidden = reviewMode !== name;
-            });
-            Object.entries(buttons).forEach(([name, id]) => {
-                const button = document.getElementById(id);
-                if (!button) return;
-                button.classList.toggle('active', reviewMode === name);
-                button.setAttribute('aria-pressed', String(reviewMode === name));
-            });
-            if (reviewMode === 'groups') renderReviewGroups();
+        function openSelectedFindingEditor() {
+            const details = document.getElementById('assistantEditDetails');
+            if (details) details.open = true;
+            const field = document.getElementById('assistantReplacement');
+            if (field) field.focus();
         }
 
         function focusAssistantCard() {
@@ -2635,19 +2801,13 @@
             await handleMutation(response, 'Finding details saved.');
         }
 
+        // The same call for both formats. It used to fork on '.pdf' and
+        // decide the finding's boxes along with it; a finding decision now
+        // stops at the finding, and the boxes keep their own step -- which is
+        // the safeguard pdf_export_blockers() refuses on.
         async function reviewAssistantAction(action) {
             const finding = selectedFinding();
             if (!canReview || !finding) return;
-            const nextId = nextPendingFindingAfter(finding.id);
-            if (currentDoc.file_extension === '.pdf') {
-                const regionIds = pdfRegions.filter((region) => region.finding_id === finding.id).map((region) => region.id).join(',');
-                await queueAction({ stopPropagation() {} }, finding.id, regionIds, action);
-                if (nextId) {
-                    selectFinding(nextId, false);
-                    focusAssistantCard();
-                }
-                return;
-            }
             await findingAction(finding.id, action);
         }
 
@@ -2769,15 +2929,13 @@
             if (currentDoc.file_extension === '.pdf') {
                 const linkedRegion = pdfRegions.find((region) => region.finding_id === findingId);
                 if (linkedRegion) selectPdfRegion(linkedRegion.id, true);
-                renderReviewQueue();
             } else {
                 renderDocView();
-                renderFindingGroups(currentDoc.findings || []);
             }
+            renderReviewList();
             renderAssistant(currentDoc);
-            renderBulkReviewTable(currentDoc.findings || []);
             if (scrollToCard) {
-                const card = document.querySelector(`.finding[data-finding-id="${findingId}"]`);
+                const card = document.querySelector(`.review-row[data-finding-id="${findingId}"]`);
                 if (card) card.scrollIntoView({ block: 'nearest' });
             } else {
                 const span = document.querySelector(`.doc-span[data-finding-id="${findingId}"]`);
@@ -2987,7 +3145,6 @@
         // puts the reviewer exactly where it happens -- never just describes it.
         function stepAction(action) {
             if (action === 'findings') {
-                setReviewMode('groups');
                 document.getElementById('reviewGroups')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                 return;
             }
@@ -3129,84 +3286,6 @@
             `;
         }
 
-        function renderFindingGroups(findings) {
-            const grouped = {};
-            findings.forEach((finding) => {
-                const label = groupLabels[finding.category] || 'Other';
-                if (!grouped[label]) grouped[label] = [];
-                grouped[label].push(finding);
-            });
-            const labels = Object.keys(grouped).sort();
-            document.getElementById('findingGroups').innerHTML = labels.length
-                ? labels.map((label) => groupHtml(label, grouped[label])).join('')
-                : '<div class="subtle">No automated findings.</div>';
-        }
-
-        // Takes the explicit pending finding ids for this rendered group
-        // (never a bare category, which the backend would otherwise resolve
-        // against the whole table, including findings this reviewer never
-        // saw). See batchReviewCategory above for the same fix applied to the
-        // By-type pane.
-        function groupBulkButtonsHtml(pendingIds, label) {
-            if (!canReview || !pendingIds.length) return '';
-            const idsAttr = escapeAttr(pendingIds.join(','));
-            const labelAttr = escapeAttr(label);
-            return `
-                <div class="group-actions">
-                    <button class="approve" type="button" data-bulk-action="approve" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Approve all</button>
-                    <button type="button" data-bulk-action="dismiss" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Not sensitive — all</button>
-                    <button class="danger retain-action" type="button" data-bulk-action="retain" data-finding-ids="${idsAttr}" data-group-label="${labelAttr}">Keep all unredacted</button>
-                </div>
-            `;
-        }
-
-        async function groupBulkAction(action, findingIds, label) {
-            if (!canReview || !findingIds.length) return;
-            if (!confirmFindingDecision(action, findingIds.length, label || 'finding(s)', null, true)) return;
-            const response = await fetch(`/api/document/${docId}/findings/review-batch`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, finding_ids: findingIds, only_pending: true })
-            });
-            if (!response.ok) {
-                const data = await response.json().catch(() => ({}));
-                showToast(data.error || 'Bulk review failed.');
-                return;
-            }
-            const data = await response.json();
-            if (currentDoc && currentDoc.file_extension === '.pdf') {
-                const findingIdSet = new Set(findingIds);
-                const regionIds = pdfRegions
-                    .filter((region) => findingIdSet.has(region.finding_id) && (region.review_status || 'pending') === 'pending')
-                    .map((region) => region.id);
-                if (regionIds.length) {
-                    await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: pdfRegionActionFor(action), region_ids: regionIds, only_pending: true })
-                    });
-                }
-            }
-            showToast(`${data.updated ?? findingIds.length} finding(s) ${findingActionPastTense(action)}.`);
-            await reloadDocument();
-        }
-
-        function groupHtml(label, findings) {
-            const pendingIds = findings
-                .filter((finding) => (finding.review_status || 'pending') === 'pending')
-                .map((finding) => finding.id);
-            return `
-                <section class="group">
-                    <div class="group-title">
-                        <h3>${escapeHtml(label)}</h3>
-                        <span class="badge">${findings.length} · ${pendingIds.length} pending</span>
-                    </div>
-                    ${groupBulkButtonsHtml(pendingIds, label)}
-                    ${findings.map(findingHtml).join('')}
-                </section>
-            `;
-        }
-
         const VERIFICATION_STATUS_LABELS = {
             pending_export: 'Awaiting export QA',
             redacted_verified: 'Verified redacted (QA passed)',
@@ -3249,55 +3328,11 @@
             `;
         }
 
-        function findingHtml(finding) {
-            const evidence = finding.evidence || {};
-            const selectedCls = finding.id === selectedFindingId ? ' selected' : '';
-            const anchorHtml = evidenceAnchorHtml(evidence);
-            const verificationLabel = verificationStatusLabel(evidence.verification_status);
-            {% if can_review %}
-            return `
-                <div class="finding selectable${selectedCls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, false)">
-                    <div class="finding-meta">
-                        <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
-                        <span class="badge">${escapeHtml(finding.category)}</span>
-                        <span class="badge">${escapeHtml(finding.review_status || 'pending')}</span>
-                    </div>
-                    <div class="finding-sample">${escapeHtml(finding.sample || '-')}</div>
-                    ${anchorHtml}
-                    <div class="subtle">${escapeHtml(verificationLabel)}</div>
-                    <div class="subtle">${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</div>
-                    ${findingRationaleHtml(finding)}
-                    <div class="finding-actions">
-                        <button class="approve" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'approve')">Approve</button>
-                        <button type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'dismiss')">Not sensitive</button>
-                        <button class="danger retain-action" type="button" onclick="event.stopPropagation(); findingAction(${finding.id}, 'retain')">Keep unredacted</button>
-                    </div>
-                </div>
-            `;
-            {% else %}
-            return `
-                <div class="finding selectable${selectedCls}" data-finding-id="${finding.id}" onclick="selectFinding(${finding.id}, false)">
-                    <div class="finding-meta">
-                        <span class="badge risk-${escapeHtml(finding.risk)}">${escapeHtml(finding.risk)}</span>
-                        <span class="badge">${escapeHtml(finding.category)}</span>
-                        <span class="badge">${escapeHtml(finding.review_status || 'pending')}</span>
-                    </div>
-                    <div class="finding-sample">${escapeHtml(finding.sample || '-')}</div>
-                    ${anchorHtml}
-                    <div class="subtle">${escapeHtml(verificationLabel)}</div>
-                    <div class="subtle">${escapeHtml(finding.replacement_text || finding.placeholder || '-')}</div>
-                    ${findingRationaleHtml(finding)}
-                </div>
-            `;
-            {% endif %}
-        }
-
         async function findingAction(findingId, action) {
             if (!canReview) return;
             const finding = ((currentDoc && currentDoc.findings) || []).find((item) => item.id === findingId);
             if (!confirmFindingDecision(action, 1, finding ? categoryLabel(finding.category) : 'finding', finding ? finding.risk : null, false)) return;
-            const isDocView = currentDoc && currentDoc.file_extension !== '.pdf';
-            const nextId = isDocView ? nextPendingFindingAfter(findingId) : null;
+            const nextId = nextPendingFindingAfter(findingId);
             const response = await fetch(`/api/finding/${findingId}/review`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3309,9 +3344,9 @@
                 return;
             }
             await reloadDocument();
-            if (isDocView && nextId) {
+            if (nextId) {
                 selectFinding(nextId, false);
-                const card = document.querySelector(`.finding[data-finding-id="${nextId}"]`);
+                const card = document.querySelector(`.review-row[data-finding-id="${nextId}"]`);
                 if (card) card.scrollIntoView({ block: 'nearest' });
             }
             if (action === 'pending') {
@@ -3628,11 +3663,10 @@
                 pdfSelectedRegionId = null;
             }
             renderPdfRegionOverlays();
-            renderReviewQueue();
+            renderReviewList();
             updatePdfNav();
             updatePdfSelectionPanel();
             renderAssistant(currentDoc);
-            renderBulkReviewTable(currentDoc.findings || []);
         }
 
         function selectedPdfRegion() {
@@ -3789,20 +3823,20 @@
                 renderPdfPages().then(() => {
                     renderPdfRegionOverlays();
                     updatePdfSelectionPanel();
-                    highlightQueueItem();
                     if (currentDoc) {
+                        renderReviewList();
                         renderAssistant(currentDoc);
-                        renderBulkReviewTable(currentDoc.findings || []);
+                        highlightReviewRow();
                     }
                 });
                 return;
             }
             renderPdfRegionOverlays();
             updatePdfSelectionPanel();
-            highlightQueueItem();
             if (currentDoc) {
+                renderReviewList();
                 renderAssistant(currentDoc);
-                renderBulkReviewTable(currentDoc.findings || []);
+                highlightReviewRow();
             }
         }
 
@@ -3887,9 +3921,8 @@
                 if (currentDoc.file_extension === '.pdf') selectPdfRegion(null, false);
                 else {
                     renderDocView();
-                    renderFindingGroups(currentDoc.findings || []);
+                    renderReviewList();
                     renderAssistant(currentDoc);
-                    renderBulkReviewTable(currentDoc.findings || []);
                 }
                 return;
             }
@@ -3905,9 +3938,7 @@
             }
             if ((event.key === 'e' || event.key === 'E') && selectedFindingId) {
                 event.preventDefault();
-                setReviewMode('guided');
-                const editField = document.getElementById('assistantReplacement');
-                if (editField) editField.focus();
+                openSelectedFindingEditor();
                 return;
             }
             if (!selectedFindingId) {
@@ -3935,173 +3966,6 @@
             }
         });
 
-        function buildReviewQueue() {
-            const findings = (currentDoc && currentDoc.findings) || [];
-            const regionsByFinding = {};
-            const standalone = [];
-            pdfRegions.forEach((region) => {
-                if (region.finding_id) {
-                    (regionsByFinding[region.finding_id] = regionsByFinding[region.finding_id] || []).push(region);
-                } else {
-                    standalone.push(region);
-                }
-            });
-            const grouped = {};
-            findings.forEach((finding) => {
-                const label = groupLabels[finding.category] || 'Other';
-                (grouped[label] = grouped[label] || []).push({ finding, regions: regionsByFinding[finding.id] || [] });
-            });
-            if (standalone.length) {
-                grouped['Manual boxes'] = standalone.map((region) => ({ finding: null, regions: [region] }));
-            }
-            return grouped;
-        }
-
-        function queueItemHtml(item) {
-            const finding = item.finding;
-            const regions = item.regions;
-            const regionIds = regions.map((region) => region.id).join(',');
-            const pendingBoxes = regions.filter((region) => (region.review_status || 'pending') === 'pending').length;
-            const pages = [...new Set(regions.map((region) => region.page_number))].join(', ');
-            const boxNote = regions.length
-                ? `${regions.length} box(es) on page ${pages}${pendingBoxes ? ` · ${pendingBoxes} pending` : ' · all reviewed'} — click to locate`
-                : 'No box on the page yet — draw one or use Generate Boxes';
-            const status = finding ? (finding.review_status || 'pending') : (regions[0].review_status || 'pending');
-            const risk = finding ? finding.risk : 'HIGH';
-            const category = finding ? finding.category : (regions[0].category || 'manual_sensitive_text');
-            const sample = finding ? (finding.sample || '-') : `Manual box (${regions[0].source || 'manual'})`;
-            const note = !finding && regions[0].reviewer_note ? `<div class="queue-boxes">Note: ${escapeHtml(regions[0].reviewer_note)}</div>` : '';
-            const actions = canReview ? `
-                <div class="finding-actions">
-                    <button type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'approve')">Approve</button>
-                    <button type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'dismiss')">Not sensitive</button>
-                    <button class="danger retain-action" type="button" onclick="queueAction(event, ${finding ? finding.id : 'null'}, '${regionIds}', 'retain')">Keep unredacted</button>
-                </div>` : '';
-            return `
-                <div class="finding queue-item" data-region-ids="${regionIds}" onclick="queueLocate('${regionIds}')">
-                    <div class="finding-meta">
-                        <span class="badge risk-${escapeHtml(risk)}">${escapeHtml(risk)}</span>
-                        <span class="badge">${escapeHtml(category)}</span>
-                        <span class="badge">${escapeHtml(status)}</span>
-                    </div>
-                    <div class="finding-sample">${escapeHtml(sample)}</div>
-                    <div class="queue-boxes">${escapeHtml(boxNote)}</div>
-                    ${note}
-                    ${finding ? findingRationaleHtml(finding) : ''}
-                    ${actions}
-                </div>
-            `;
-        }
-
-        function renderReviewQueue() {
-            if (!currentDoc || currentDoc.file_extension !== '.pdf') return;
-            const target = document.getElementById('findingGroups');
-            const grouped = buildReviewQueue();
-            const labels = Object.keys(grouped).sort();
-            target.innerHTML = labels.length
-                ? labels.map((label) => {
-                    const items = grouped[label];
-                    const pending = items.filter((item) => {
-                        const findingPending = item.finding && (item.finding.review_status || 'pending') === 'pending';
-                        const boxPending = item.regions.some((region) => (region.review_status || 'pending') === 'pending');
-                        return findingPending || boxPending;
-                    }).length;
-                    const findingPendingIds = items
-                        .filter((item) => item.finding && (item.finding.review_status || 'pending') === 'pending')
-                        .map((item) => item.finding.id);
-                    let bulkHtml = '';
-                    if (findingPendingIds.length) {
-                        bulkHtml = groupBulkButtonsHtml(findingPendingIds, label);
-                    } else if (canReview && pending) {
-                        const regionIds = items.flatMap((item) => item.regions.map((region) => region.id)).join(',');
-                        bulkHtml = `
-                            <div class="group-actions">
-                                <button type="button" onclick="pdfBatchReview({ action: 'approve', region_ids: [${regionIds}], only_pending: true })">Approve all</button>
-                                <button class="danger" type="button" onclick="pdfBatchReview({ action: 'reject', region_ids: [${regionIds}], only_pending: true })">Reject all</button>
-                            </div>
-                        `;
-                    }
-                    return `
-                        <section class="group">
-                            <div class="group-title">
-                                <h3>${escapeHtml(label)}</h3>
-                                <span class="badge">${items.length} · ${pending} pending</span>
-                            </div>
-                            ${bulkHtml}
-                            ${items.map(queueItemHtml).join('')}
-                        </section>
-                    `;
-                }).join('')
-                : '<div class="subtle">No findings or redaction boxes yet. Use Generate Boxes, or draw directly on the page.</div>';
-            highlightQueueItem();
-        }
-
-        function queueLocate(regionIdsCsv) {
-            const ids = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
-            if (ids.length) selectPdfRegion(ids[0], true);
-        }
-
-        function highlightQueueItem() {
-            document.querySelectorAll('.queue-item').forEach((el) => {
-                const ids = (el.dataset.regionIds || '').split(',').map(Number).filter(Boolean);
-                const match = Boolean(pdfSelectedRegionId) && ids.includes(pdfSelectedRegionId);
-                el.classList.toggle('selected', match);
-                if (match) el.scrollIntoView({ block: 'nearest' });
-            });
-        }
-
-        async function queueAction(event, findingId, regionIdsCsv, action) {
-            event.stopPropagation();
-            if (!canReview) return;
-            const queued = ((currentDoc && currentDoc.findings) || []).find((item) => item.id === findingId);
-            if (!confirmFindingDecision(action, 1, queued ? categoryLabel(queued.category) : 'item', queued ? queued.risk : null, false)) return;
-            const regionIds = String(regionIdsCsv || '').split(',').map(Number).filter(Boolean);
-            if (findingId) {
-                const response = await fetch(`/api/finding/${findingId}/review`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action })
-                });
-                if (!response.ok) {
-                    const data = await response.json().catch(() => ({}));
-                    showToast(data.error || 'Finding update failed.');
-                    return;
-                }
-            }
-            if (regionIds.length) {
-                const response = await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: pdfRegionActionFor(action), region_ids: regionIds, only_pending: false })
-                });
-                if (!response.ok) {
-                    const data = await response.json().catch(() => ({}));
-                    showToast(data.error || 'Box update failed.');
-                    return;
-                }
-            }
-            await reloadDocument();
-            const message = `Item and linked box(es) ${findingActionPastTense(action)}.`;
-            if (findingId) {
-                showToast(message, { label: 'Undo', onClick: () => undoFinding(findingId, regionIdsCsv) });
-            } else if (regionIds.length) {
-                showToast(message, {
-                    label: 'Undo',
-                    onClick: async () => {
-                        await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ action: 'pending', region_ids: regionIds, only_pending: false })
-                        });
-                        await reloadDocument();
-                        showToast('Decision reverted to pending.');
-                    }
-                });
-            } else {
-                showToast(message);
-            }
-        }
-
         async function generatePdfRegions() {
             if (!canReview) return;
             const response = await fetch(`/api/document/${docId}/pdf/regions/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
@@ -4116,7 +3980,7 @@
 
         async function pdfBatchReview(payload) {
             if (!canReview) return;
-            if (payload && payload.action === 'reject' && !window.confirm('Reject the selected pending redaction boxes? Rejected boxes will not be blacked out on export.')) return;
+            if (payload && payload.action === 'reject' && !window.confirm('Reject the selected pending redaction boxes?\n\nA rejected box is not blacked out in the exported PDF. Reject a box whose position is wrong; rejecting one that covers a real identifier leaves that identifier visible in the file.')) return;
             const response = await fetch(`/api/document/${docId}/pdf/regions/review-batch`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
